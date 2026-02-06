@@ -9,9 +9,16 @@ export const errorMiddleware = (err, req, res, next) => {
   err.message = err.message || 'Internal Server Error'
   err.statusCode = err.statusCode || 500
 
-  // Log error to console for debugging
-  console.error('❌ Error:', err.message)
-  console.error('📍 Stack:', err.stack)
+  // Skip logging for expected errors (404, expired JWT, etc)
+  const shouldSkipLogging =
+    err.statusCode === 404 ||
+    err.name === 'TokenExpiredError' ||
+    err.message?.includes('not found on this server')
+
+  if (!shouldSkipLogging) {
+    console.error('❌ Error:', err.message)
+    console.error('📍 Stack:', err.stack)
+  }
 
   if (err.code === 11000) {
     const message = `Duplicate field value entered`
