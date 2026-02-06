@@ -22,6 +22,11 @@ const app = express()
 
 config({ path: './.env' })
 
+// Health check endpoint (must be before CORS for preflight requests)
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date() })
+})
+
 app.use(
   cors({
     origin: [process.env.FRONTEND_URL, process.env.DASHBOARD_URL],
@@ -30,6 +35,7 @@ app.use(
   }),
 )
 
+// Stripe webhook must be before JSON parser
 app.post('/api/v1/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature']
   let event
@@ -78,6 +84,7 @@ app.post('/api/v1/payment/webhook', express.raw({ type: 'application/json' }), a
   res.status(200).send({ received: true })
 })
 
+// Standard middleware
 app.use(cookieParser())
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -92,6 +99,7 @@ app.use(
 // Apply rate limiting to all API routes
 app.use('/api/v1', rateLimitMiddleware)
 
+// API Routes
 app.use('/api/v1/auth', authRouter)
 app.use('/api/v1/product', productRouter)
 app.use('/api/v1/admin', adminRouter)

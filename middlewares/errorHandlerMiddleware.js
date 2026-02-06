@@ -14,6 +14,16 @@ export { ErrorHandler }
  * Called when no route matches the request
  */
 export const notFoundMiddleware = (req, res, next) => {
+  // Don't log 404s for health checks or known static requests
+  const isHealthCheck = req.path === '/health'
+  const isFavicon = req.path === '/favicon.ico'
+  const isManifest = req.path === '/manifest.json'
+
+  // Only log unexpected 404s
+  if (!isHealthCheck && !isFavicon && !isManifest && process.env.NODE_ENV === 'development') {
+    console.warn(`⚠️ 404 Not Found: ${req.method} ${req.originalUrl}`)
+  }
+
   const error = new ErrorHandler(`Requested URL ${req.originalUrl} not found on this server`, 404)
   next(error)
 }
@@ -193,6 +203,11 @@ export const logError = (error, req) => {
   const ip = req.ip
   const errorMessage = error.message
   const statusCode = error.statusCode || 500
+
+  // Don't log expected 404s
+  if (statusCode === 404) {
+    return // Skip logging 404 errors as they're expected
+  }
 
   console.error(
     `[${timestamp}] ${statusCode} ${method} ${url} - IP: ${ip} - Error: ${errorMessage}`,
