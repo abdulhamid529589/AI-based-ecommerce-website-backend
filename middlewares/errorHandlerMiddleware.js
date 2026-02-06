@@ -204,9 +204,14 @@ export const logError = (error, req) => {
   const errorMessage = error.message
   const statusCode = error.statusCode || 500
 
-  // Don't log expected 404s
-  if (statusCode === 404) {
-    return // Skip logging 404 errors as they're expected
+  // Don't log expected 404s or health check requests
+  if (
+    statusCode === 404 ||
+    url === '/health' ||
+    url === '/favicon.ico' ||
+    url === '/manifest.json'
+  ) {
+    return // Skip logging 404 errors and static asset requests
   }
 
   console.error(
