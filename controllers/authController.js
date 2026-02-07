@@ -11,41 +11,106 @@ import crypto from 'crypto'
 import { v2 as cloudinary } from 'cloudinary'
 
 export const register = catchAsyncErrors(async (req, res, next) => {
-  const { name, email, password, role } = req.body
-  if (!name || !email || !password) {
-    return next(new ErrorHandler('Please provide all required fields.', 400))
+  const { name, email, mobile, password, role } = req.body
+
+  // Validate inputs
+  if (!name || !password) {
+    return next(new ErrorHandler('Please provide name and password.', 400))
   }
+
+  if (!email && !mobile) {
+    return next(new ErrorHandler('Please provide either email or mobile number.', 400))
+  }
+
   if (password.length < 8 || password.length > 16) {
     return next(new ErrorHandler('Password must be between 8 and 16 characters.', 400))
   }
 
-  const isAlreadyRegistered = await database.query(`SELECT * FROM users WHERE email = $1`, [email])
+  // Validate mobile format if provided (Bangladeshi format)
+  if (mobile) {
+    // Remove all non-digit characters to validate
+    const digitsOnly = mobile.replace(/\D/g, '')
 
-  if (isAlreadyRegistered.rows.length > 0) {
-    return next(new ErrorHandler('User already registered with this email.', 400))
+    // Bangladesh mobile: 10-11 digits (01XXXXXXXXX) or +880 format
+    // Accepted formats:
+    // - Local: 01XXXXXXXXX (11 digits)
+    // - International: +8801XXXXXXXXX (13 digits including +88)
+    if (
+      !(
+        (digitsOnly.length === 11 && digitsOnly.startsWith('1')) ||
+        (digitsOnly.length === 13 && digitsOnly.startsWith('880'))
+      )
+    ) {
+      return next(
+        new ErrorHandler(
+          'Please provide a valid Bangladesh mobile number (+880 1XX XXX XXXX or 01XXXXXXXXX).',
+          400,
+        ),
+      )
+    }
+
+    // Normalize to international format for storage
+    const normalizedMobile = digitsOnly.startsWith('880')
+      ? '+' + digitsOnly
+      : '+880' + digitsOnly.slice(1)
+
+    // Check if mobile already exists
+    const mobileExists = await database.query(`SELECT * FROM users WHERE mobile = $1`, [
+      normalizedMobile,
+    ])
+    if (mobileExists.rows.length > 0) {
+      return next(new ErrorHandler('User already registered with this mobile number.', 400))
+    }
+
+    mobile = normalizedMobile
   }
 
   const hashedPassword = await bcrypt.hash(password, 10)
   const userRole = role === 'Admin' ? 'Admin' : 'User'
+
   const user = await database.query(
-    'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING *',
-    [name, email, hashedPassword, userRole],
+    'INSERT INTO users (name, email, mobile, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [name, email || null, mobile || null, hashedPassword, userRole],
   )
   sendToken(user.rows[0], 201, 'User registered successfully', res)
 })
 
 export const login = catchAsyncErrors(async (req, res, next) => {
-  const { email, password } = req.body
-  if (!email || !password) {
-    return next(new ErrorHandler('Please provide email and password.', 400))
+  const { email, mobile, password } = req.body
+
+  if (!password) {
+    return next(new ErrorHandler('Please provide password.', 400))
   }
-  const user = await database.query(`SELECT * FROM users WHERE email = $1`, [email])
+
+  if (!email && !mobile) {
+    return next(new ErrorHandler('Please provide email or mobile number.', 400))
+  }
+
+  let user
+  let queryMobile = mobile
+
+  if (email) {
+    user = await database.query(`SELECT * FROM users WHERE email = $1`, [email])
+  } else if (mobile) {
+    // Normalize Bangladesh mobile number for login
+    const digitsOnly = mobile.replace(/\D/g, '')
+
+    // Normalize to international format to match database storage
+    const normalizedMobile = digitsOnly.startsWith('880')
+      ? '+' + digitsOnly
+      : '+880' + digitsOnly.slice(1)
+
+    queryMobile = normalizedMobile
+    user = await database.query(`SELECT * FROM users WHERE mobile = $1`, [normalizedMobile])
+  }
+
   if (user.rows.length === 0) {
-    return next(new ErrorHandler('Invalid email or password.', 401))
+    return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
+
   const isPasswordMatch = await bcrypt.compare(password, user.rows[0].password)
   if (!isPasswordMatch) {
-    return next(new ErrorHandler('Invalid email or password.', 401))
+    return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
   sendToken(user.rows[0], 200, 'Logged In.', res)
 })
