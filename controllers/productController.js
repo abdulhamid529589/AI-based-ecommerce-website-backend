@@ -251,9 +251,15 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
 export const postProductReview = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
   const { rating, comment } = req.body
+
   if (!rating || !comment) {
     return next(new ErrorHandler('Please provide rating and comment.', 400))
   }
+
+  if (rating < 1 || rating > 5) {
+    return next(new ErrorHandler('Rating must be between 1 and 5.', 400))
+  }
+
   const purchasheCheckQuery = `
     SELECT oi.product_id
     FROM order_items oi
@@ -280,9 +286,7 @@ export const postProductReview = catchAsyncErrors(async (req, res, next) => {
   }
 
   const isAlreadyReviewed = await database.query(
-    `
-    SELECT * FROM reviews WHERE product_id = $1 AND user_id = $2
-    `,
+    `SELECT * FROM reviews WHERE product_id = $1 AND user_id = $2`,
     [productId, req.user.id],
   )
 
@@ -300,30 +304,40 @@ export const postProductReview = catchAsyncErrors(async (req, res, next) => {
     )
   }
 
+  // Get all reviews for average
   const allReviews = await database.query(
-    `SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = $1`,
+    `SELECT AVG(rating::NUMERIC) AS avg_rating, COUNT(*) AS total_reviews FROM reviews WHERE product_id = $1`,
     [productId],
   )
 
-  const newAvgRating = allReviews.rows[0].avg_rating
+  const newAvgRating = allReviews.rows[0].avg_rating ? parseFloat(allReviews.rows[0].avg_rating) : 0
 
   const updatedProduct = await database.query(
-    `
-        UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *
-        `,
-    [newAvgRating, productId],
+    `UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *`,
+    [Math.round(newAvgRating * 10) / 10, productId],
+  )
+
+  // Fetch all reviews with user info for the response
+  const allReviewsWithUserInfo = await database.query(
+    `SELECT r.*, u.name as user_name FROM reviews r
+     JOIN users u ON r.user_id = u.id
+     WHERE r.product_id = $1
+     ORDER BY r.created_at DESC`,
+    [productId],
   )
 
   res.status(200).json({
     success: true,
-    message: 'Review posted.',
+    message: 'Review posted successfully.',
     review: review.rows[0],
+    reviews: allReviewsWithUserInfo.rows,
     product: updatedProduct.rows[0],
   })
 })
 
 export const deleteReview = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
+
   const review = await database.query(
     'DELETE FROM reviews WHERE product_id = $1 AND user_id = $2 RETURNING *',
     [productId, req.user.id],
@@ -333,24 +347,33 @@ export const deleteReview = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Review not found.', 404))
   }
 
+  // Get updated average rating
   const allReviews = await database.query(
-    `SELECT AVG(rating) AS avg_rating FROM reviews WHERE product_id = $1`,
+    `SELECT AVG(rating::NUMERIC) AS avg_rating FROM reviews WHERE product_id = $1`,
     [productId],
   )
 
-  const newAvgRating = allReviews.rows[0].avg_rating
+  const newAvgRating = allReviews.rows[0].avg_rating ? parseFloat(allReviews.rows[0].avg_rating) : 0
 
   const updatedProduct = await database.query(
-    `
-        UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *
-        `,
-    [newAvgRating, productId],
+    `UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *`,
+    [Math.round(newAvgRating * 10) / 10, productId],
+  )
+
+  // Fetch all reviews with user info
+  const allReviewsWithUserInfo = await database.query(
+    `SELECT r.*, u.name as user_name FROM reviews r
+     JOIN users u ON r.user_id = u.id
+     WHERE r.product_id = $1
+     ORDER BY r.created_at DESC`,
+    [productId],
   )
 
   res.status(200).json({
     success: true,
     message: 'Your review has been deleted.',
     review: review.rows[0],
+    reviews: allReviewsWithUserInfo.rows,
     product: updatedProduct.rows[0],
   })
 })
