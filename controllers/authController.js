@@ -176,6 +176,11 @@ export const refreshAccessToken = catchAsyncErrors(async (req, res, next) => {
         message: 'Access token refreshed successfully.',
       })
   } catch (error) {
+    // Log detailed error for debugging (do not expose secrets to clients)
+    console.error('Refresh token verification failed:', error.name, error.message)
+    if (error.name === 'TokenExpiredError') {
+      return next(new ErrorHandler('Refresh token expired.', 401))
+    }
     return next(new ErrorHandler('Invalid refresh token.', 401))
   }
 })
