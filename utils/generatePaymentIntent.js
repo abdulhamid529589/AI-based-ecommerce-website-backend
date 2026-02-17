@@ -1,15 +1,26 @@
 import database from '../database/db.js'
 import Stripe from 'stripe'
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  throw new Error('STRIPE_SECRET_KEY is not defined in environment variables')
-}
+// Lazy load Stripe - don't throw at import time
+let stripe = null
 
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY)
+const initializeStripe = () => {
+  if (!stripe && process.env.STRIPE_SECRET_KEY) {
+    stripe = Stripe(process.env.STRIPE_SECRET_KEY)
+  }
+  return stripe
+}
 
 export async function generatePaymentIntent(orderId, totalPrice) {
   try {
-    const paymentIntent = await stripe.paymentIntents.create({
+    const stripeInstance = initializeStripe()
+
+    if (!stripeInstance) {
+      console.warn('Stripe is not configured - payment processing disabled')
+      return { success: false, message: 'Payment processing is not configured on this server' }
+    }
+
+    const paymentIntent = await stripeInstance.paymentIntents.create({
       amount: totalPrice * 100,
       currency: 'bdt', // Bangladesh Taka
     })
