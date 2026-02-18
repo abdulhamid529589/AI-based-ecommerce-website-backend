@@ -3,10 +3,9 @@ import { config } from 'dotenv'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import fileUpload from 'express-fileupload'
-import csrf from 'csurf'
+import crypto from 'crypto'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-import session from 'express-session'
 import { createTables } from './utils/createTables.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
 import {
@@ -132,48 +131,57 @@ app.use(
   }),
 )
 
-// 🔒 Session middleware for CSRF token storage
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || 'your-session-secret-change-in-production',
-    resave: false,
-    saveUninitialized: true,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    },
-  }),
-)
+// 🔒 CUSTOM CSRF PROTECTION - Simple & Reliable
+// Store CSRF tokens in memory (production should use Redis, but this works for Render free tier)
+const csrfTokens = new Map()
 
-// 🔒 CSRF Protection - Session-based store
-// For SPAs where token is validated via headers
-const csrfProtection = csrf({
-  cookie: false,
-  sessionKey: 'csrfToken',
-})
+// Generate CSRF token
+const generateCSRFToken = () => {
+  const token = crypto.randomBytes(32).toString('hex')
+  const expiresAt = Date.now() + 60 * 60 * 1000 // 1 hour expiration
+  csrfTokens.set(token, { createdAt: Date.now(), expiresAt })
+
+  // Cleanup old tokens (keep map from growing indefinitely)
+  if (csrfTokens.size > 10000) {
+    const now = Date.now()
+    for (const [key, value] of csrfTokens.entries()) {
+      if (value.expiresAt < now) {
+        csrfTokens.delete(key)
+      }
+    }
+  }
+
+  return token
+}
+
+// Validate CSRF token
+const validateCSRFToken = (token) => {
+  if (!token || !csrfTokens.has(token)) {
+    return false
+  }
+
+  const tokenData = csrfTokens.get(token)
+  if (Date.now() > tokenData.expiresAt) {
+    csrfTokens.delete(token)
+    return false
+  }
+
+  // Delete token after validation (one-time use)
+  csrfTokens.delete(token)
+  return true
+}
 
 // Endpoint to get CSRF token (public, no auth required)
-// This endpoint generates a fresh token that can be used for subsequent requests
-app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
-  try {
-    const token = req.csrfToken()
-    console.log('🔐 Generated CSRF token for client')
-    // Return token in JSON body - client will send it back in X-CSRF-Token header
-    return res.json({ csrfToken: token, success: true })
-  } catch (err) {
-    console.warn('⚠️ Failed to generate CSRF token:', err.message)
-    return res.status(500).json({ success: false, message: 'Failed to generate CSRF token' })
-  }
+app.get('/api/v1/csrf-token', (req, res) => {
+  const token = generateCSRFToken()
+  console.log('🔐 Generated CSRF token for client')
+  res.json({ csrfToken: token, success: true })
 })
 
-// Apply CSRF protection to state-changing routes
-// This validates that the X-CSRF-Token header matches a valid token
+// CSRF validation middleware
 const csrfMiddleware = (req, res, next) => {
   // Only validate CSRF for state-changing requests
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    // Custom CSRF validation that checks headers instead of cookies
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
 
@@ -187,30 +195,17 @@ const csrfMiddleware = (req, res, next) => {
       })
     }
 
-    // Validate token with csurf
-    csrfProtection(req, res, (err) => {
-      if (err) {
-        console.warn('⚠️ CSRF validation warning:', err.message)
-        console.warn('⚠️ Request:', {
-          method: req.method,
-          url: req.path,
-          headers: {
-            'x-csrf-token': req.headers['x-csrf-token']?.substring(0, 10) + '...',
-            'x-xsrf-token': req.headers['x-xsrf-token']?.substring(0, 10) + '...',
-          },
-          cookies: Object.keys(req.cookies),
-        })
+    if (!validateCSRFToken(token)) {
+      console.warn('⚠️ CSRF validation failed - invalid or expired token')
+      return res.status(403).json({
+        success: false,
+        code: 'CSRF_FAILED',
+        message: 'CSRF token validation failed or expired',
+        shouldRefresh: true,
+      })
+    }
 
-        // Return CSRF_FAILED code so client can refresh token and retry
-        return res.status(403).json({
-          success: false,
-          code: 'CSRF_FAILED',
-          message: 'CSRF token validation failed',
-          shouldRefresh: true,
-        })
-      }
-      next()
-    })
+    next()
   } else {
     next()
   }
