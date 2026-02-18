@@ -129,10 +129,14 @@ export const logout = catchAsyncErrors(async (req, res, next) => {
     .cookie('accessToken', '', {
       expires: new Date(Date.now()),
       httpOnly: true,
+      sameSite: 'Lax',
+      secure: process.env.NODE_ENV === 'production',
     })
     .cookie('refreshToken', '', {
       expires: new Date(Date.now()),
       httpOnly: true,
+      sameSite: 'Lax',
+      secure: process.env.NODE_ENV === 'production',
     })
     .json({
       success: true,

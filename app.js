@@ -132,22 +132,50 @@ app.use(
 )
 
 // 🔒 CSRF Protection - token endpoint must be public
-const csrfProtection = csrf({ cookie: true })
+// Configure cookie options to allow cross-site usage from frontend/dashboard
+const csrfCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax', // Allow same-site or no-site requests
+}
+
+const csrfProtection = csrf({ cookie: csrfCookieOptions })
 
 // Endpoint to get CSRF token (public, no auth required)
 app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
-  res.json({ csrfToken: req.csrfToken() })
+  // Set a readable cookie for client frameworks (not httpOnly) as well
+  // so it's available to cross-site requests when needed.
+  // We send the token in the JSON body and also set a non-httpOnly cookie named XSRF-TOKEN.
+  try {
+    const token = req.csrfToken()
+    res.cookie('XSRF-TOKEN', token, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax', // Allow cross-site requests to read token
+    })
+    return res.json({ csrfToken: token })
+  } catch (err) {
+    console.warn('⚠️ Failed to generate CSRF token:', err.message)
+    return res.status(500).json({ success: false, message: 'Failed to generate CSRF token' })
+  }
 })
 
 // Apply CSRF protection to state-changing routes
 const csrfMiddleware = (req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     csrfProtection(req, res, (err) => {
-      // Log CSRF errors but allow them to pass through for debugging
+      // Handle CSRF errors gracefully
       if (err) {
         console.warn('⚠️ CSRF validation warning:', err.message)
-        // Don't reject - let it fail gracefully with proper error handling
-        return next(err)
+        console.warn('⚠️ CSRF token validation failed - attempting recovery')
+
+        // Return CSRF_FAILED code so client can refresh token and retry
+        return res.status(403).json({
+          success: false,
+          code: 'CSRF_FAILED',
+          message: 'CSRF token validation failed',
+          shouldRefresh: true,
+        })
       }
       next()
     })

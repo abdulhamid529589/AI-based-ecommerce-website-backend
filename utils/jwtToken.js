@@ -24,19 +24,19 @@ export const sendToken = (user, statusCode, message, res) => {
     .cookie('token', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Strict',
+      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
       secure: process.env.NODE_ENV === 'production',
     })
     .cookie('accessToken', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Strict',
+      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
       secure: process.env.NODE_ENV === 'production',
     })
     .cookie('refreshToken', refreshToken, {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       httpOnly: true,
-      sameSite: 'Strict',
+      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
       secure: process.env.NODE_ENV === 'production',
     })
     .json({

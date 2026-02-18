@@ -112,14 +112,17 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
   values.push(offset)
   index++
 
-  // FETCH WITH REVIEWS
+  // FETCH WITH REVIEWS AND FEATURED STATUS
   const query = `
     SELECT p.*,
-    COUNT(r.id) AS review_count
+    COUNT(r.id) AS review_count,
+    CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
+    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
     FROM products p
     LEFT JOIN reviews r ON p.id = r.product_id
+    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
     ${whereClause}
-    GROUP BY p.id
+    GROUP BY p.id, fp.id
     ORDER BY p.created_at DESC
     LIMIT ${paginationPlaceholders.limit}
     OFFSET ${paginationPlaceholders.offset}
@@ -130,11 +133,14 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
   // QUERY FOR FETCHING NEW PRODUCTS
   const newProductsQuery = `
     SELECT p.*,
-    COUNT(r.id) AS review_count
+    COUNT(r.id) AS review_count,
+    true AS is_new,
+    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
     FROM products p
     LEFT JOIN reviews r ON p.id = r.product_id
+    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
     WHERE p.created_at >= NOW() - INTERVAL '30 days'
-    GROUP BY p.id
+    GROUP BY p.id, fp.id
     ORDER BY p.created_at DESC
     LIMIT 8
   `
@@ -143,11 +149,14 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
   // QUERY FOR FETCHING TOP RATING PRODUCTS (rating >= 4.5)
   const topRatedQuery = `
     SELECT p.*,
-    COUNT(r.id) AS review_count
+    COUNT(r.id) AS review_count,
+    CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
+    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
     FROM products p
     LEFT JOIN reviews r ON p.id = r.product_id
+    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
     WHERE p.ratings >= 4.5
-    GROUP BY p.id
+    GROUP BY p.id, fp.id
     ORDER BY p.ratings DESC, p.created_at DESC
     LIMIT 8
   `
