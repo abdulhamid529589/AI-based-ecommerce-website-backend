@@ -131,24 +131,14 @@ app.use(
   }),
 )
 
-// 🔒 CSRF Protection - Simplified approach
-// Use custom value getter to look for token in headers first (for SPA/frontend usage)
+// 🔒 CSRF Protection - Cookie-based with secure configuration
+// Uses httpOnly cookies for token storage (secure for stateless SPAs)
 const csrfProtection = csrf({
-  cookie: false, // Don't use cookies for storage
-  value: (req) => {
-    // Try to get token from X-CSRF-Token header first (for frontend)
-    if (req.headers['x-csrf-token']) {
-      return req.headers['x-csrf-token']
-    }
-    // Fall back to X-XSRF-Token header
-    if (req.headers['x-xsrf-token']) {
-      return req.headers['x-xsrf-token']
-    }
-    // Finally try body field _csrf
-    if (req.body && req.body._csrf) {
-      return req.body._csrf
-    }
-    return null
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+    sameSite: 'lax', // Allow cross-site top-level navigations
+    path: '/',
   },
 })
 
