@@ -3,6 +3,9 @@ import { config } from 'dotenv'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import fileUpload from 'express-fileupload'
+import csrf from 'csurf'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import { createTables } from './utils/createTables.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
 import {
@@ -84,6 +87,38 @@ app.post('/api/v1/payment/webhook', express.raw({ type: 'application/json' }), a
   res.status(200).send({ received: true })
 })
 
+// Security middleware - apply before routes
+// Add security headers with CSP
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net', 'js.stripe.com'],
+        styleSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
+        imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
+        fontSrc: ["'self'", 'data:', 'cdn.jsdelivr.net'],
+        connectSrc: ["'self'", 'api.stripe.com'],
+        frameSrc: ["'self'", 'js.stripe.com'],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        childSrc: ["'self'"],
+        // 🔒 Strict policy to prevent XSS, clickjacking, etc
+      },
+    },
+    hsts: {
+      maxAge: 31536000, // 1 year
+      includeSubDomains: true,
+      preload: true,
+    },
+    frameguard: { action: 'deny' },
+    noSniff: true,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    xssFilter: true,
+  }),
+)
+app.disable('x-powered-by')
+
 // Standard middleware
 app.use(cookieParser())
 app.use(express.json())
@@ -96,8 +131,51 @@ app.use(
   }),
 )
 
+// 🔒 CSRF Protection - token endpoint must be public
+const csrfProtection = csrf({ cookie: true })
+
+// Endpoint to get CSRF token (public, no auth required)
+app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() })
+})
+
+// Apply CSRF protection to state-changing routes
+const csrfMiddleware = (req, res, next) => {
+  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+    csrfProtection(req, res, next)
+  } else {
+    next()
+  }
+}
+
+// 🔒 Strict rate limiting for critical operations
+const strictLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5, // 5 requests per minute
+  message: 'Too many order attempts, please wait before trying again',
+  skip: (req) => req.user?.role === 'Admin', // Exempt admins
+})
+
+const paymentLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 3, // 3 payment attempts per minute
+  message: 'Too many payment attempts, please try again later',
+})
+
 // Apply rate limiting to all API routes
 app.use('/api/v1', rateLimitMiddleware)
+
+// Apply CSRF to API routes
+app.use('/api/v1', csrfMiddleware)
+
+// 🔒 Add additional security headers on every response
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('X-XSS-Protection', '1; mode=block')
+  next()
+})
 
 // API Routes
 app.use('/api/v1/auth', authRouter)
@@ -105,6 +183,12 @@ app.use('/api/v1/product', productRouter)
 app.use('/api/v1/admin', adminRouter)
 app.use('/api/v1/order', orderRouter)
 app.use('/api/v1/payment', paymentGatewayRouter)
+
+// Apply strict rate limiting to critical endpoints
+app.post('/api/v1/order/new', strictLimiter)
+app.post('/api/v1/payment/stripe', paymentLimiter)
+app.post('/api/v1/payment/bkash', paymentLimiter)
+app.post('/api/v1/payment/nagad', paymentLimiter)
 
 createTables()
 

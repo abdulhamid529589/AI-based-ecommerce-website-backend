@@ -143,14 +143,6 @@ router.post('/settings/theme', isAuthenticated, authorizedRoles('Admin'), update
 router.get('/settings/shipping', isAuthenticated, authorizedRoles('Admin'), getShipping)
 router.post('/settings/shipping', isAuthenticated, authorizedRoles('Admin'), updateShipping)
 
-// Admin product management (compatibility with dashboard requests to /admin/products)
-router.get('/products', isAuthenticated, authorizedRoles('Admin'), fetchAllProducts)
-router.post('/products', isAuthenticated, authorizedRoles('Admin'), createProduct)
-router.put('/products/:productId', isAuthenticated, authorizedRoles('Admin'), updateProduct)
-router.delete('/products/:productId', isAuthenticated, authorizedRoles('Admin'), deleteProduct)
-router.get('/products/:productId', isAuthenticated, authorizedRoles('Admin'), fetchSingleProduct)
-router.post('/products/import', isAuthenticated, authorizedRoles('Admin'), bulkImportProducts)
-
 // Route aliases for dashboard compatibility
 router.get('/dashboard', isAuthenticated, authorizedRoles('Admin'), dashboardStats)
 router.get('/customers', isAuthenticated, authorizedRoles('Admin'), getAllUsers)

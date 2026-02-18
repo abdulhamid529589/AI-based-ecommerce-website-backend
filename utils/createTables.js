@@ -10,6 +10,7 @@ import {
   createHeroSlidesTable,
   createFeaturedProductsTable,
 } from '../models/settingsTable.js'
+import createAuditLogsTable from '../models/auditLogsTable.js'
 
 export const createTables = async () => {
   try {
@@ -23,6 +24,8 @@ export const createTables = async () => {
     await createSettingsTable()
     await createHeroSlidesTable()
     await createFeaturedProductsTable()
+    // 🔒 Create audit logs table for security monitoring
+    await createAuditLogsTable()
     console.log('All Tables Created Successfully.')
   } catch (error) {
     console.error('Error creating tables:', error)

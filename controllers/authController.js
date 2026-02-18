@@ -150,7 +150,7 @@ export const refreshAccessToken = catchAsyncErrors(async (req, res, next) => {
   try {
     const decoded = jwt.verify(
       refreshToken,
-      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET_KEY,
+      process.env.JWT_SECRET_KEY_REFRESH || process.env.JWT_SECRET_KEY,
     )
 
     const user = await database.query(`SELECT * FROM users WHERE id = $1`, [decoded.id])
@@ -159,15 +159,23 @@ export const refreshAccessToken = catchAsyncErrors(async (req, res, next) => {
       return next(new ErrorHandler('User not found.', 404))
     }
 
-    // Generate new access token
-    const accessToken = jwt.sign({ id: user.rows[0].id }, process.env.JWT_SECRET_KEY, {
-      expiresIn: '1h',
-    })
+    // Generate new access token using access key with short expiration
+    const accessToken = jwt.sign(
+      { id: user.rows[0].id },
+      process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY,
+      {
+        expiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || '15m',
+      },
+    )
 
     res
       .status(200)
+      .cookie('token', accessToken, {
+        expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+        httpOnly: true,
+      })
       .cookie('accessToken', accessToken, {
-        expires: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+        expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
         httpOnly: true,
       })
       .json({
@@ -332,5 +340,57 @@ export const updateProfile = catchAsyncErrors(async (req, res, next) => {
     success: true,
     message: 'Profile updated successfully.',
     user: user.rows[0],
+  })
+})
+export const updateNotificationPreferences = catchAsyncErrors(async (req, res, next) => {
+  const { emailNotifications, smsNotifications, pushNotifications } = req.body
+  const userId = req.user.id
+
+  // Validate at least one preference is provided
+  if (
+    emailNotifications === undefined &&
+    smsNotifications === undefined &&
+    pushNotifications === undefined
+  ) {
+    return next(new ErrorHandler('Please provide at least one notification preference.', 400))
+  }
+
+  // Build dynamic update query
+  const updates = []
+  const values = []
+  let paramCount = 1
+
+  if (emailNotifications !== undefined) {
+    updates.push(`email_notifications = $${paramCount++}`)
+    values.push(emailNotifications)
+  }
+
+  if (smsNotifications !== undefined) {
+    updates.push(`sms_notifications = $${paramCount++}`)
+    values.push(smsNotifications)
+  }
+
+  if (pushNotifications !== undefined) {
+    updates.push(`push_notifications = $${paramCount++}`)
+    values.push(pushNotifications)
+  }
+
+  // Add userId and updated_at
+  updates.push(`updated_at = CURRENT_TIMESTAMP`)
+  values.push(userId)
+
+  const result = await database.query(
+    `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING id, name, email, email_notifications, sms_notifications, push_notifications`,
+    values,
+  )
+
+  if (result.rows.length === 0) {
+    return next(new ErrorHandler('User not found.', 404))
+  }
+
+  res.status(200).json({
+    success: true,
+    message: 'Notification preferences updated successfully.',
+    data: result.rows[0],
   })
 })

@@ -18,6 +18,13 @@ import {
   trendingProducts,
   markReviewHelpful,
 } from '../controllers/productController.js'
+import {
+  getWishlist,
+  addToWishlist,
+  removeFromWishlist,
+  isInWishlist,
+  clearWishlist,
+} from '../controllers/wishlistController.js'
 import { getShopInfo, getHeroSlides } from '../controllers/settingsController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
 
@@ -55,5 +62,12 @@ router.get('/search/trending', trendingProducts)
 
 // Review helpful endpoint
 router.post('/review/helpful/:reviewId', markReviewHelpful)
+
+// Wishlist endpoints
+router.get('/wishlist', isAuthenticated, getWishlist)
+router.post('/wishlist/:productId', isAuthenticated, addToWishlist)
+router.delete('/wishlist/:productId', isAuthenticated, removeFromWishlist)
+router.get('/wishlist/:productId', isAuthenticated, isInWishlist)
+router.delete('/wishlist', isAuthenticated, clearWishlist)
 
 export default router

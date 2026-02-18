@@ -2,6 +2,8 @@ import ErrorHandler from '../middlewares/errorMiddleware.js'
 import { catchAsyncErrors } from '../middlewares/catchAsyncError.js'
 import database from '../database/db.js'
 import { generatePaymentIntent } from '../utils/generatePaymentIntent.js'
+import { validateOrderData } from '../utils/inputValidator.js'
+import { logOrderCreation, logValidationFailure } from '../utils/auditLogger.js'
 
 export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
   try {
@@ -22,40 +24,103 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       return next(new ErrorHandler('User not authenticated.', 401))
     }
 
-    if (!full_name || !state || !city || !country || !address || !pincode || !phone) {
-      return next(new ErrorHandler('Please provide complete shipping details.', 400))
+    // 🔒 VALIDATE AND SANITIZE ALL INPUT
+    let validatedData
+    try {
+      validatedData = validateOrderData({
+        full_name,
+        state,
+        city,
+        country,
+        address,
+        pincode,
+        phone,
+        orderedItems,
+        paymentMethod,
+      })
+    } catch (validationError) {
+      // Log validation failure for security monitoring
+      await logValidationFailure(
+        req.user.id,
+        req.ip,
+        validationError.message.split(' ')[0],
+        validationError.message,
+      )
+      return next(validationError)
     }
 
-    const items = Array.isArray(orderedItems) ? orderedItems : JSON.parse(orderedItems)
-
-    if (!items || items.length === 0) {
-      return next(new ErrorHandler('No items in cart.', 400))
+    // 🔒 CRITICAL FIX #7: Check for idempotency key to prevent duplicate charges
+    const idempotencyKey = req.headers['idempotency-key']
+    if (!idempotencyKey) {
+      return next(new ErrorHandler('Idempotency-Key header required for order creation', 400))
     }
+
+    // Check if order already created with this idempotency key
+    const existingOrder = await database.query(
+      'SELECT id, total_price, tax_price, shipping_price FROM orders WHERE idempotency_key = $1 AND buyer_id = $2',
+      [idempotencyKey, req.user.id],
+    )
+
+    if (existingOrder.rows[0]) {
+      // Return cached response to prevent duplicate processing
+      console.log('📦 Order already created with this idempotency key:', idempotencyKey)
+      return res.status(200).json({
+        success: true,
+        message: 'Order already processed',
+        order: { id: existingOrder.rows[0].id },
+        total_price: existingOrder.rows[0].total_price,
+        tax_price: existingOrder.rows[0].tax_price,
+        shipping_price: existingOrder.rows[0].shipping_price,
+        cached: true,
+      })
+    }
+
+    const items = Array.isArray(validatedData.orderedItems)
+      ? validatedData.orderedItems
+      : JSON.parse(validatedData.orderedItems)
     const productIds = items.map((item) => item.product.id)
     const { rows: products } = await database.query(
       `SELECT id, price, stock, name FROM products WHERE id = ANY($1::uuid[])`,
       [productIds],
     )
 
-    let total_price = 0
+    let subtotal_price = 0
     const values = []
     const placeholders = []
 
-    items.forEach((item, index) => {
+    // 🔒 CRITICAL FIX #1: Validate each item quantity before processing
+    for (const item of items) {
       const product = products.find((p) => p.id === item.product.id)
 
       if (!product) {
         return next(new ErrorHandler(`Product not found for ID: ${item.product.id}`, 404))
       }
 
+      // 🔒 Validate quantity is positive integer
+      if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+        return next(
+          new ErrorHandler('Invalid quantity in order. Quantity must be at least 1.', 400),
+        )
+      }
+
+      // 🔒 Validate quantity doesn't exceed maximum
+      if (item.quantity > 100) {
+        return next(new ErrorHandler('Maximum quantity per order is 100 items.', 400))
+      }
+
+      // Validate stock availability
       if (item.quantity > product.stock) {
         return next(
           new ErrorHandler(`Only ${product.stock} units available for ${product.name}`, 400),
         )
       }
+    }
 
+    // Calculate subtotal using database prices and validated quantities
+    items.forEach((item, index) => {
+      const product = products.find((p) => p.id === item.product.id)
       const itemTotal = product.price * item.quantity
-      total_price += itemTotal
+      subtotal_price += itemTotal
 
       // Get image URL safely - handle missing images array
       const imageUrl =
@@ -83,12 +148,15 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       shipping_price = 100 // ৳100 for other districts
     }
 
-    // Calculate final total: subtotal + shipping (no tax)
-    total_price = Math.round(total_price + shipping_price)
+    // 🔒 CRITICAL FIX #4: Calculate tax on SERVER (5% of subtotal)
+    const tax_price = Math.round(subtotal_price * 0.05)
+
+    // Calculate final total: subtotal + shipping + tax
+    const total_price = Math.round(subtotal_price + shipping_price + tax_price)
 
     const orderResult = await database.query(
-      `INSERT INTO orders (buyer_id, total_price, tax_price, shipping_price) VALUES ($1, $2, $3, $4) RETURNING *`,
-      [req.user.id, total_price, 0, shipping_price],
+      `INSERT INTO orders (buyer_id, total_price, tax_price, shipping_price, idempotency_key) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [req.user.id, total_price, tax_price, shipping_price, idempotencyKey],
     )
 
     const orderId = orderResult.rows[0].id
@@ -134,11 +202,15 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     // For COD, skip online payment gateway and just return success
     if (paymentMethod === 'COD') {
       console.log('COD Order created successfully:', orderId)
+      // 🔒 Log order creation for audit trail
+      await logOrderCreation(req.user.id, orderId, total_price, 'COD', 'SUCCESS')
       return res.status(200).json({
         success: true,
         message: 'Order placed successfully. Payment pending on delivery.',
         order: { id: orderId },
         total_price,
+        tax_price,
+        shipping_price,
       })
     }
 
@@ -149,15 +221,24 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       return next(new ErrorHandler('Payment failed. Try again.', 500))
     }
 
+    // 🔒 Log order creation for online payment
+    await logOrderCreation(req.user.id, orderId, total_price, 'Stripe', 'SUCCESS')
+
     res.status(200).json({
       success: true,
       message: 'Order placed successfully. Please proceed to payment.',
       paymentIntent: paymentResponse.clientSecret,
       total_price,
+      tax_price,
+      shipping_price,
     })
   } catch (error) {
     console.error('Order creation error:', error.message)
     console.error('Full error:', error)
+    // 🔒 Log failed order creation
+    if (req.user?.id) {
+      await logOrderCreation(req.user.id, 'unknown', 0, 'unknown', 'FAILURE')
+    }
     return next(new ErrorHandler(error.message || 'Failed to create order', 500))
   }
 })

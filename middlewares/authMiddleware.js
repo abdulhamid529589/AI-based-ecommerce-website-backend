@@ -4,7 +4,7 @@ import ErrorHandler from './errorMiddleware.js'
 import database from '../database/db.js'
 
 export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
-  let token = req.cookies?.token
+  let token = req.cookies?.token || req.cookies?.accessToken
 
   // If token not in cookies, check Authorization header
   if (!token && req.headers.authorization) {
@@ -18,7 +18,7 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Please login to access this resource.', 401))
   }
 
-  const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY)
+  const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY)
 
   const user = await database.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [decoded.id])
   req.user = user.rows[0]
