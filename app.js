@@ -6,6 +6,7 @@ import fileUpload from 'express-fileupload'
 import csrf from 'csurf'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import session from 'express-session'
 import { createTables } from './utils/createTables.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
 import {
@@ -131,15 +132,26 @@ app.use(
   }),
 )
 
-// 🔒 CSRF Protection - Cookie-based with secure configuration
-// Uses httpOnly cookies for token storage (secure for stateless SPAs)
+// 🔒 Session middleware for CSRF token storage
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || 'your-session-secret-change-in-production',
+    resave: false,
+    saveUninitialized: true,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    },
+  }),
+)
+
+// 🔒 CSRF Protection - Session-based store
+// For SPAs where token is validated via headers
 const csrfProtection = csrf({
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: 'lax', // Allow cross-site top-level navigations
-    path: '/',
-  },
+  cookie: false,
+  sessionKey: 'csrfToken',
 })
 
 // Endpoint to get CSRF token (public, no auth required)
@@ -161,6 +173,21 @@ app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
 const csrfMiddleware = (req, res, next) => {
   // Only validate CSRF for state-changing requests
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+    // Custom CSRF validation that checks headers instead of cookies
+    const token =
+      req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
+
+    if (!token) {
+      console.warn('⚠️ CSRF token missing in request')
+      return res.status(403).json({
+        success: false,
+        code: 'CSRF_FAILED',
+        message: 'CSRF token missing',
+        shouldRefresh: true,
+      })
+    }
+
+    // Validate token with csurf
     csrfProtection(req, res, (err) => {
       if (err) {
         console.warn('⚠️ CSRF validation warning:', err.message)
