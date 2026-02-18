@@ -131,29 +131,35 @@ app.use(
   }),
 )
 
-// 🔒 CSRF Protection - token endpoint must be public
-// Configure cookie options to allow cross-site usage from frontend/dashboard
-const csrfCookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax', // Allow same-site or no-site requests
-}
-
-const csrfProtection = csrf({ cookie: csrfCookieOptions })
+// 🔒 CSRF Protection - Simplified approach
+// Use custom value getter to look for token in headers first (for SPA/frontend usage)
+const csrfProtection = csrf({
+  cookie: false, // Don't use cookies for storage
+  value: (req) => {
+    // Try to get token from X-CSRF-Token header first (for frontend)
+    if (req.headers['x-csrf-token']) {
+      return req.headers['x-csrf-token']
+    }
+    // Fall back to X-XSRF-Token header
+    if (req.headers['x-xsrf-token']) {
+      return req.headers['x-xsrf-token']
+    }
+    // Finally try body field _csrf
+    if (req.body && req.body._csrf) {
+      return req.body._csrf
+    }
+    return null
+  },
+})
 
 // Endpoint to get CSRF token (public, no auth required)
+// This endpoint generates a fresh token that can be used for subsequent requests
 app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
-  // Set a readable cookie for client frameworks (not httpOnly) as well
-  // so it's available to cross-site requests when needed.
-  // We send the token in the JSON body and also set a non-httpOnly cookie named XSRF-TOKEN.
   try {
     const token = req.csrfToken()
-    res.cookie('XSRF-TOKEN', token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax', // Allow cross-site requests to read token
-    })
-    return res.json({ csrfToken: token })
+    console.log('🔐 Generated CSRF token for client')
+    // Return token in JSON body - client will send it back in X-CSRF-Token header
+    return res.json({ csrfToken: token, success: true })
   } catch (err) {
     console.warn('⚠️ Failed to generate CSRF token:', err.message)
     return res.status(500).json({ success: false, message: 'Failed to generate CSRF token' })
@@ -161,13 +167,22 @@ app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
 })
 
 // Apply CSRF protection to state-changing routes
+// This validates that the X-CSRF-Token header matches a valid token
 const csrfMiddleware = (req, res, next) => {
+  // Only validate CSRF for state-changing requests
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     csrfProtection(req, res, (err) => {
-      // Handle CSRF errors gracefully
       if (err) {
         console.warn('⚠️ CSRF validation warning:', err.message)
-        console.warn('⚠️ CSRF token validation failed - attempting recovery')
+        console.warn('⚠️ Request:', {
+          method: req.method,
+          url: req.path,
+          headers: {
+            'x-csrf-token': req.headers['x-csrf-token']?.substring(0, 10) + '...',
+            'x-xsrf-token': req.headers['x-xsrf-token']?.substring(0, 10) + '...',
+          },
+          cookies: Object.keys(req.cookies),
+        })
 
         // Return CSRF_FAILED code so client can refresh token and retry
         return res.status(403).json({
