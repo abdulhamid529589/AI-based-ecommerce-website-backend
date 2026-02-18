@@ -142,7 +142,15 @@ app.get('/api/v1/csrf-token', csrfProtection, (req, res) => {
 // Apply CSRF protection to state-changing routes
 const csrfMiddleware = (req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    csrfProtection(req, res, next)
+    csrfProtection(req, res, (err) => {
+      // Log CSRF errors but allow them to pass through for debugging
+      if (err) {
+        console.warn('⚠️ CSRF validation warning:', err.message)
+        // Don't reject - let it fail gracefully with proper error handling
+        return next(err)
+      }
+      next()
+    })
   } else {
     next()
   }
@@ -191,6 +199,25 @@ app.post('/api/v1/payment/bkash', paymentLimiter)
 app.post('/api/v1/payment/nagad', paymentLimiter)
 
 createTables()
+
+// 🔒 CSRF Error handler - handle CSRF token mismatches gracefully
+app.use((err, req, res, next) => {
+  if (err.code === 'EBADCSRFTOKEN') {
+    console.warn('⚠️ CSRF token validation failed - attempting recovery')
+    // CSRF token errors usually mean:
+    // 1. Token expired
+    // 2. First request (no token yet)
+    // 3. Token not sent in headers
+    // For now, log and let frontend know to refresh token
+    return res.status(403).json({
+      success: false,
+      message: 'CSRF token validation failed. Please refresh and try again.',
+      code: 'CSRF_FAILED',
+      shouldRefresh: true,
+    })
+  }
+  next(err)
+})
 
 // 404 Not Found handler - must be before error handler
 app.use(notFoundMiddleware)
