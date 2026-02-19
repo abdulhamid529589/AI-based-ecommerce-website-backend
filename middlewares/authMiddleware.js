@@ -36,6 +36,8 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
 
     if (!secretKey) {
       console.error('❌ JWT_SECRET_KEY environment variables not configured!')
+      console.error('   JWT_SECRET_KEY_ACCESS:', process.env.JWT_SECRET_KEY_ACCESS ? '✓' : '✗')
+      console.error('   JWT_SECRET_KEY:', process.env.JWT_SECRET_KEY ? '✓' : '✗')
       return next(new ErrorHandler('Server configuration error. Please try again later.', 500))
     }
 
@@ -48,19 +50,28 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     }
 
     req.user = user.rows[0]
+    console.log(
+      `✅ User authenticated: ${user.rows[0].name} (ID: ${user.rows[0].id}) from ${tokenSource}`,
+    )
     next()
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
+      const tokenPreview = token ? token.substring(0, 50) : 'null'
+      const isDef = token === 'undefined' ? ' ⚠️ TOKEN IS LITERAL "undefined" STRING!' : ''
       console.error('❌ JWT Verification Error:', error.message)
       console.error('   Token source:', tokenSource)
       console.error('   Token length:', token ? token.length : 0)
-      console.error('   First 30 chars:', token ? token.substring(0, 30) : 'null')
+      console.error('   Token preview:', tokenPreview + isDef)
+      console.error('   Expected: JWT format (header.payload.signature)')
+      console.error('   Actual:', token || 'missing')
       return next(new ErrorHandler('Invalid token. Please login again.', 401))
     } else if (error.name === 'TokenExpiredError') {
       console.error('⏰ JWT Expired at:', error.expiredAt)
+      console.error('   Token source:', tokenSource)
       return next(new ErrorHandler('Token expired. Please login again.', 401))
     }
     console.error('❌ Authentication error:', error.message)
+    console.error('   Token source:', tokenSource)
     return next(new ErrorHandler('Authentication failed. Please login again.', 401))
   }
 })

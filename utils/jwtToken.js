@@ -1,23 +1,32 @@
 import jwt from 'jsonwebtoken'
 
 export const sendToken = (user, statusCode, message, res) => {
-  // Access token - short-lived (15 minutes) - uses dedicated access key
-  const accessToken = jwt.sign(
-    { id: user.id },
-    process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY,
-    {
-      expiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || '15m',
-    },
-  )
+  const secretKeyAccess = process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY
+  const secretKeyRefresh = process.env.JWT_SECRET_KEY_REFRESH || process.env.JWT_SECRET_KEY
 
-  // Refresh token - long-lived (7 days) - uses dedicated refresh key
-  const refreshToken = jwt.sign(
-    { id: user.id },
-    process.env.JWT_SECRET_KEY_REFRESH || process.env.JWT_SECRET_KEY,
-    {
-      expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || '7d',
-    },
-  )
+  if (!secretKeyAccess || !secretKeyRefresh) {
+    console.error('❌ CRITICAL: JWT_SECRET_KEY environment variables not configured!')
+    console.error('   JWT_SECRET_KEY_ACCESS:', secretKeyAccess ? '✓' : '✗ MISSING')
+    console.error('   JWT_SECRET_KEY_REFRESH:', secretKeyRefresh ? '✓' : '✗ MISSING')
+    return res.status(500).json({
+      success: false,
+      message: 'Server configuration error. Please try again later.',
+    })
+  }
+
+  // Access token - short-lived (15 minutes)
+  const accessToken = jwt.sign({ id: user.id }, secretKeyAccess, {
+    expiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || '15m',
+  })
+
+  // Refresh token - long-lived (7 days)
+  const refreshToken = jwt.sign({ id: user.id }, secretKeyRefresh, {
+    expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || '7d',
+  })
+
+  console.log(`✅ Generated tokens for user ID: ${user.id}`)
+  console.log(`   Access Token length: ${accessToken.length} chars`)
+  console.log(`   Refresh Token length: ${refreshToken.length} chars`)
 
   res
     .status(statusCode)
@@ -43,8 +52,11 @@ export const sendToken = (user, statusCode, message, res) => {
       success: true,
       user,
       message,
-      // 🔒 REMOVED: Don't send tokens in response body
-      // Tokens are already in HttpOnly cookies, JS cannot access them
-      // This prevents token exposure via network logs or error messages
+      // 🔒 Return tokens in response for SPA/frontend compatibility
+      // Frontend stores in localStorage for persistence
+      // Cookies provide additional HttpOnly layer for security
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      token: accessToken, // Alias for backward compatibility
     })
 }
