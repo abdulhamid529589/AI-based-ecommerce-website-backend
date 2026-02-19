@@ -34,11 +34,21 @@ app.get('/health', (req, res) => {
   })
 })
 
+// 🔒 CORS Configuration - whitelist approved origins
+const allowedOrigins = [process.env.FRONTEND_URL, process.env.DASHBOARD_URL].filter(Boolean) // Remove undefined values
+
+console.log('🔐 CORS Configuration:')
+console.log(
+  '   Allowed Origins:',
+  allowedOrigins.length > 0 ? allowedOrigins : 'ALL (development mode)',
+)
+
 app.use(
   cors({
-    origin: [process.env.FRONTEND_URL, process.env.DASHBOARD_URL],
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    origin: allowedOrigins.length > 0 ? allowedOrigins : true, // If no origins specified, allow all (dev only)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-XSRF-Token'],
   }),
 )
 
