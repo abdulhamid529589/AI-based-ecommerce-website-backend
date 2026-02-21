@@ -31,6 +31,6 @@ export async function createOrdersTable() {
     await database.query(indexQuery)
   } catch (error) {
     console.error('❌ Failed To Create Orders Table.', error)
-    process.exit(1)
+    // Continue without exiting - database may be unavailable
   }
 }

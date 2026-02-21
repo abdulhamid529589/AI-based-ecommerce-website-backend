@@ -12,6 +12,6 @@ export async function createPaymentsTable() {
     await database.query(query)
   } catch (error) {
     console.error('❌ Failed To Create Payments Table.', error)
-    process.exit(1)
+    // Continue without exiting - database may be unavailable
   }
 }

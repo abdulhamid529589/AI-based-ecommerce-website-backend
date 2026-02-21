@@ -46,9 +46,29 @@ export const errorMiddleware = (err, req, res, next) => {
         .join(' ')
     : err.message
 
+  // Map status codes to error codes
+  const getErrorCode = (statusCode) => {
+    switch (statusCode) {
+      case 401:
+        return 'UNAUTHORIZED'
+      case 403:
+        return 'FORBIDDEN'
+      case 404:
+        return 'NOT_FOUND'
+      case 400:
+        return 'BAD_REQUEST'
+      case 500:
+        return 'INTERNAL_SERVER_ERROR'
+      default:
+        return 'ERROR'
+    }
+  }
+
   return res.status(err.statusCode).json({
     success: false,
     message: errorMessage,
+    code: getErrorCode(err.statusCode),
+    timestamp: new Date().toISOString(),
   })
 }
 

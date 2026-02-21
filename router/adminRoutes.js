@@ -4,11 +4,17 @@ import {
   deleteUser,
   dashboardStats,
   updateUser,
-  getRevenueAnalytics,
-  getCategorySalesAnalytics,
   getCustomerOrders,
   getDashboardActivityFeed,
 } from '../controllers/adminController.js'
+import {
+  getRevenueAnalytics,
+  getCategorySalesAnalytics,
+  getCustomerAnalytics,
+  getProductAnalytics,
+  getOrderStatusAnalytics,
+  getPaymentMethodAnalytics,
+} from '../controllers/analyticsController.js'
 import {
   createProduct,
   fetchAllProducts,
@@ -43,6 +49,14 @@ import {
   getShipping,
   updateShipping,
 } from '../controllers/settingsController.js'
+import {
+  getPromotions,
+  getPromotion,
+  createPromotion,
+  updatePromotion,
+  deletePromotion,
+  getPromotionAnalytics,
+} from '../controllers/promotionController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
 
 const router = express.Router()
@@ -168,6 +182,24 @@ router.get(
   isAuthenticated,
   authorizedRoles('Admin'),
   getDashboardActivityFeed,
+)
+
+// Promotions & Discounts
+router.get('/promotions', isAuthenticated, authorizedRoles('Admin'), getPromotions)
+router.get('/promotions/:promotionId', isAuthenticated, authorizedRoles('Admin'), getPromotion)
+router.post('/promotions', isAuthenticated, authorizedRoles('Admin'), createPromotion)
+router.put('/promotions/:promotionId', isAuthenticated, authorizedRoles('Admin'), updatePromotion)
+router.delete(
+  '/promotions/:promotionId',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  deletePromotion,
+)
+router.get(
+  '/promotions/:promotionId/analytics',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  getPromotionAnalytics,
 )
 
 export default router

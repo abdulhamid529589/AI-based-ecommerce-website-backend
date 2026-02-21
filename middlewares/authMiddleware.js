@@ -24,10 +24,22 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  if (!token) {
-    console.warn('⚠️ No token found in cookies or headers')
-    console.warn('   Cookies:', Object.keys(req.cookies || {}))
-    console.warn('   Authorization header:', req.headers.authorization ? 'present' : 'missing')
+  // DEBUG: Log token sources for order/admin endpoints
+  if (req.path.includes('/order/admin')) {
+    console.log(`🔐 /order/admin token check:`, {
+      tokenSource,
+      hasCookieToken: !!req.cookies?.token || !!req.cookies?.accessToken,
+      hasAuthHeader: !!req.headers.authorization,
+    })
+  }
+
+  // ✅ CRITICAL FIX: Check for literal 'undefined' string in token
+  if (!token || token === 'undefined' || token === null) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('⚠️ No token found in cookies or headers')
+      console.warn('   Cookies:', Object.keys(req.cookies || {}))
+      console.warn('   Authorization header:', req.headers.authorization ? 'present' : 'missing')
+    }
     return next(new ErrorHandler('Please login to access this resource.', 401))
   }
 
@@ -42,17 +54,47 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, secretKey)
+    console.log(`   JWT Decoded ID: ${decoded.id}`)
+
+    // DEBUG: Compare JWT role vs database role for order/admin requests
+    if (req.path.includes('/order/admin')) {
+      console.log(`   🔐 JWT ROLE CHECK for order/admin:`, {
+        roleInToken: decoded.role,
+        tokenVerified: true,
+      })
+    }
 
     const user = await database.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [decoded.id])
     if (!user.rows[0]) {
       console.warn(`⚠️ User not found for token decoded id: ${decoded.id}`)
+      console.warn(`   Database query returned ${user.rows.length} rows`)
       return next(new ErrorHandler('User not found. Please login again.', 401))
     }
 
     req.user = user.rows[0]
+    // 🔍 DEBUG: Log all user columns for troubleshooting
     console.log(
       `✅ User authenticated: ${user.rows[0].name} (ID: ${user.rows[0].id}) from ${tokenSource}`,
     )
+    console.log(`   User object keys: ${Object.keys(user.rows[0]).join(', ')}`)
+    console.log(`   User role value: "${user.rows[0].role}" (type: ${typeof user.rows[0].role})`)
+
+    // DEBUG: Show role mismatch if it exists
+    if (req.path.includes('/order/admin') && decoded.role !== user.rows[0].role) {
+      console.log(`   ⚠️ ROLE MISMATCH DETECTED:`, {
+        roleInJWT: decoded.role,
+        roleInDB: user.rows[0].role,
+      })
+    }
+
+    console.log(`   Full user data:`, {
+      id: user.rows[0].id,
+      name: user.rows[0].name,
+      email: user.rows[0].email ? '***' : 'null',
+      mobile: user.rows[0].mobile ? '***' : 'null',
+      role: user.rows[0].role,
+      created_at: user.rows[0].created_at,
+    })
     next()
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
@@ -78,7 +120,15 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
 
 export const authorizedRoles = (...roles) => {
   return (req, res, next) => {
+    // 🔍 DEBUG: Log role information for troubleshooting
+    console.log(
+      `🔑 Role Check - User: ${req.user?.name}, Role: "${req.user?.role}", Type: ${typeof req.user?.role}, Allowed: [${roles.join(', ')}]`,
+    )
+
     if (!roles.includes(req.user.role)) {
+      console.error(
+        `❌ Authorization Failed: Role "${req.user.role}" not in allowed roles [${roles.join(', ')}]`,
+      )
       return next(
         new ErrorHandler(`Role: ${req.user.role} is not allowed to access this resource.`, 403),
       )

@@ -1,6 +1,8 @@
 import app from './app.js'
 import { v2 as cloudinary } from 'cloudinary'
 import initializeDatabase from './database/alterUsersTable.js'
+import { initializeSentry } from './utils/sentryIntegration.js'
+import { initializeIdempotencyCleanup } from './utils/idempotencyKey.js'
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLIENT_NAME,
@@ -9,9 +11,8 @@ cloudinary.config({
 })
 
 // Validate payment gateway credentials on startup
+// Note: Stripe removed - Bangladeshi website uses bKash, Nagad, Rocket, and COD only
 const requiredEnvVars = [
-  'STRIPE_API_KEY',
-  'STRIPE_WEBHOOK_SECRET',
   'BKASH_APP_KEY',
   'BKASH_APP_SECRET',
   'BKASH_BASE_URL',
@@ -31,8 +32,14 @@ if (missingVars.length > 0) {
   console.log('✅ All payment gateway credentials configured')
 }
 
+// Initialize Sentry (if configured)
+await initializeSentry()
+
 // Initialize database schema on startup
 await initializeDatabase()
+
+// Initialize idempotency cleanup routine
+initializeIdempotencyCleanup()
 
 app.listen(process.env.PORT, () => {
   console.log(`Server is running on port ${process.env.PORT}`)

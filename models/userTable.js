@@ -20,6 +20,6 @@ export async function createUserTable() {
     await database.query(query)
   } catch (error) {
     console.error('❌ Failed To Create Users Table.', error)
-    process.exit(1)
+    // Continue without exiting - database may be unavailable
   }
 }

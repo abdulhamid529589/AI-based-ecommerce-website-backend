@@ -1,4 +1,4 @@
-import database from "../database/db.js";
+import database from '../database/db.js'
 
 export async function createProductsTable() {
   try {
@@ -13,10 +13,10 @@ export async function createProductsTable() {
          stock INT NOT NULL CHECK (stock >= 0),
          created_by UUID NOT NULL,
          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-         FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE);`;
-    await database.query(query);
+         FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE);`
+    await database.query(query)
   } catch (error) {
-    console.error("❌ Failed To Create Products Table.", error);
-    process.exit(1);
+    console.error('❌ Failed To Create Products Table.', error)
+    // Continue without exiting - database may be unavailable
   }
 }

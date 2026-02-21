@@ -1,4 +1,4 @@
-import database from "../database/db.js";
+import database from '../database/db.js'
 export async function createShippingInfoTable() {
   try {
     const query = `CREATE TABLE IF NOT EXISTS shipping_info (
@@ -11,10 +11,10 @@ export async function createShippingInfoTable() {
          address TEXT NOT NULL,
          pincode VARCHAR(10) NOT NULL,
          phone VARCHAR(20) NOT NULL,
-         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE);`;
-    await database.query(query);
+         FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE);`
+    await database.query(query)
   } catch (error) {
-    console.error("❌ Failed To Create Shipping Info Table.", error);
-    process.exit(1);
+    console.error('❌ Failed To Create Shipping Info Table.', error)
+    // Continue without exiting - database may be unavailable
   }
 }

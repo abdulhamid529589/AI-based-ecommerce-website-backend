@@ -22,11 +22,11 @@ import {
   getWishlist,
   addToWishlist,
   removeFromWishlist,
-  isInWishlist,
-  clearWishlist,
+  getWishlistCount,
 } from '../controllers/wishlistController.js'
 import { getShopInfo, getHeroSlides } from '../controllers/settingsController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
+import { validateRequest } from '../middlewares/validationMiddleware.js'
 
 const router = express.Router()
 
@@ -34,10 +34,21 @@ const router = express.Router()
 router.get('/settings/shop-info', getShopInfo)
 router.get('/settings/hero-slides', getHeroSlides)
 
-router.post('/admin/create', isAuthenticated, authorizedRoles('Admin'), createProduct)
+router.post(
+  '/admin/create',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  validateRequest('createProduct'),
+  createProduct,
+)
 router.get('/', fetchAllProducts)
 router.get('/singleProduct/:productId', fetchSingleProduct)
-router.put('/post-new/review/:productId', isAuthenticated, postProductReview)
+router.put(
+  '/post-new/review/:productId',
+  isAuthenticated,
+  validateRequest('postReview'),
+  postProductReview,
+)
 router.delete('/delete/review/:productId', isAuthenticated, deleteReview)
 router.put('/admin/update/:productId', isAuthenticated, authorizedRoles('Admin'), updateProduct)
 router.delete('/admin/delete/:productId', isAuthenticated, authorizedRoles('Admin'), deleteProduct)
@@ -67,7 +78,6 @@ router.post('/review/helpful/:reviewId', markReviewHelpful)
 router.get('/wishlist', isAuthenticated, getWishlist)
 router.post('/wishlist/:productId', isAuthenticated, addToWishlist)
 router.delete('/wishlist/:productId', isAuthenticated, removeFromWishlist)
-router.get('/wishlist/:productId', isAuthenticated, isInWishlist)
-router.delete('/wishlist', isAuthenticated, clearWishlist)
+router.get('/wishlist/count', isAuthenticated, getWishlistCount)
 
 export default router

@@ -4,6 +4,7 @@
  */
 
 import database from './db.js'
+import addMobileColumnToUsers from './addMobileColumn.js'
 
 /**
  * Add notification preference columns to users table
@@ -37,8 +38,40 @@ const initializeUserNotificationColumns = async () => {
       console.log('✅ Notification preference columns already exist in users table')
     }
   } catch (error) {
-    console.error('❌ Error initializing notification columns:', error.message)
+    console.error('❌ Error initializing notification columns:', error?.message || error)
     // Don't throw - this is optional and shouldn't break startup
+  }
+}
+
+/**
+ * Make email nullable to allow mobile-only registration
+ */
+const makeEmailNullable = async () => {
+  try {
+    // Check if email column is nullable
+    const checkQuery = `
+      SELECT is_nullable FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'email'
+    `
+
+    const result = await database.query(checkQuery)
+
+    if (result.rows.length > 0 && result.rows[0].is_nullable === 'NO') {
+      console.log('🔧 Making email column nullable in users table...')
+
+      const alterQuery = `
+        ALTER TABLE users
+        ALTER COLUMN email DROP NOT NULL
+      `
+
+      await database.query(alterQuery)
+      console.log('✅ Successfully made email column nullable')
+    } else if (result.rows.length > 0) {
+      console.log('✅ Email column is already nullable')
+    }
+  } catch (error) {
+    console.error('❌ Error making email nullable:', error?.message || error)
+    // Don't throw - continue with registration anyway
   }
 }
 
@@ -75,7 +108,7 @@ const initializeAddressesTable = async () => {
     await database.query(createTableQuery)
     console.log('✅ Successfully initialized user_addresses table')
   } catch (error) {
-    console.error('❌ Error initializing addresses table:', error.message)
+    console.error('❌ Error initializing addresses table:', error?.message || error)
     // Don't throw - this is optional and shouldn't break startup
   }
 }
@@ -103,7 +136,7 @@ const initializeWishlistTable = async () => {
     await database.query(createTableQuery)
     console.log('✅ Successfully initialized wishlist_items table')
   } catch (error) {
-    console.error('❌ Error initializing wishlist table:', error.message)
+    console.error('❌ Error initializing wishlist table:', error?.message || error)
     // Don't throw - this is optional and shouldn't break startup
   }
 }
@@ -133,7 +166,7 @@ const initializeCartTable = async () => {
     await database.query(createTableQuery)
     console.log('✅ Successfully initialized cart_items table')
   } catch (error) {
-    console.error('❌ Error initializing cart table:', error.message)
+    console.error('❌ Error initializing cart table:', error?.message || error)
     // Don't throw - this is optional and shouldn't break startup
   }
 }
@@ -143,11 +176,36 @@ const initializeCartTable = async () => {
  */
 export const initializeDatabase = async () => {
   console.log('\n📦 Initializing database schema...\n')
-  await initializeUserNotificationColumns()
-  await initializeAddressesTable()
-  await initializeWishlistTable()
-  await initializeCartTable()
-  console.log('\n✅ Database schema initialization complete!\n')
+  try {
+    // First, add mobile column if missing (critical for auth)
+    await addMobileColumnToUsers()
+
+    // Make email nullable to allow mobile-only registration
+    await makeEmailNullable()
+
+    // Set a timeout for the initialization - don't block startup
+    const initPromise = Promise.all([
+      initializeUserNotificationColumns(),
+      initializeAddressesTable(),
+      initializeWishlistTable(),
+      initializeCartTable(),
+    ])
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Database initialization timeout')), 5000),
+    )
+
+    await Promise.race([initPromise, timeoutPromise])
+    console.log('\n✅ Database schema initialization complete!\n')
+  } catch (error) {
+    if (error.message === 'Database initialization timeout') {
+      console.warn('\n⚠️ Database schema initialization timed out')
+      console.warn('⚠️ Server will continue, but some features may not work properly\n')
+    } else {
+      console.error('\n❌ Error during database initialization:', error.message, '\n')
+    }
+    // Don't exit - let the server continue
+  }
 }
 
 export default initializeDatabase

@@ -4,9 +4,36 @@ import { v2 as cloudinary } from 'cloudinary'
 import database from '../database/db.js'
 import { getAIRecommendation } from '../utils/getAIRecommendation.js'
 
+// Helper function to normalize product object (convert string numbers to numbers)
+const normalizeProduct = (product) => {
+  if (!product) return product
+  return {
+    ...product,
+    price: product.price ? parseFloat(product.price) : product.price,
+    stock: product.stock ? parseInt(product.stock, 10) : product.stock,
+    rating: product.rating ? parseFloat(product.rating) : product.rating,
+  }
+}
+
 export const createProduct = catchAsyncErrors(async (req, res, next) => {
-  const { name, description, price, category, stock } = req.body
+  let { name, description, price, category, stock } = req.body
   const created_by = req.user.id
+
+  // Sanitize string inputs to prevent XSS
+  const sanitizeXSS = (str) => {
+    if (typeof str !== 'string') return str
+    return str
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/on\w+\s*=\s*"[^"]*"/gi, '')
+      .replace(/on\w+\s*=\s*'[^']*'/gi, '')
+      .replace(/<iframe[^>]*><\/iframe>/gi, '')
+      .replace(/<img[^>]*>/gi, '')
+      .replace(/javascript:/gi, '')
+  }
+
+  name = sanitizeXSS(name)
+  description = sanitizeXSS(description)
+  category = sanitizeXSS(category)
 
   if (!name || !description || !price || !category || !stock) {
     return next(new ErrorHandler('Please provide complete product details.', 400))
@@ -38,145 +65,200 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
   res.status(201).json({
     success: true,
     message: 'Product created successfully.',
-    product: product.rows[0],
+    data: normalizeProduct(product.rows[0]),
   })
 })
 
 export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
-  const { availability, price, category, ratings, search } = req.query
-  const page = parseInt(req.query.page) || 1
-  const limit = parseInt(req.query.limit) || 10
-  const offset = (page - 1) * limit
+  try {
+    const { availability, price, category, ratings, search } = req.query
+    const page = parseInt(req.query.page) || 1
+    const limit = parseInt(req.query.limit) || 10
+    const offset = (page - 1) * limit
 
-  const conditions = []
-  let values = []
-  let index = 1
-
-  let paginationPlaceholders = {}
-
-  // Filter products by availability
-  if (availability === 'in-stock') {
-    conditions.push(`stock > 5`)
-  } else if (availability === 'limited') {
-    conditions.push(`stock > 0 AND stock <= 5`)
-  } else if (availability === 'out-of-stock') {
-    conditions.push(`stock = 0`)
-  }
-
-  // Filter products by price
-  if (price) {
-    const [minPrice, maxPrice] = price.split('-')
-    if (minPrice && maxPrice) {
-      conditions.push(`price BETWEEN $${index} AND $${index + 1}`)
-      values.push(minPrice, maxPrice)
-      index += 2
+    // Validate pagination parameters
+    if (page < 1 || limit < 1) {
+      return next(new ErrorHandler('Invalid pagination parameters', 400))
     }
-  }
 
-  // Filter products by category
-  if (category) {
-    conditions.push(`category ILIKE $${index}`)
-    values.push(`%${category}%`)
+    if (limit > 100) {
+      return next(new ErrorHandler('Maximum limit is 100 products', 400))
+    }
+
+    console.log(`📦 [FETCH_ALL_PRODUCTS] Query:`, {
+      page,
+      limit,
+      offset,
+      filters: { availability, price, category, ratings, search },
+    })
+
+    const conditions = []
+    let values = []
+    let index = 1
+
+    let paginationPlaceholders = {}
+
+    // Filter products by availability
+    if (availability === 'in-stock') {
+      conditions.push(`stock > 5`)
+    } else if (availability === 'limited') {
+      conditions.push(`stock > 0 AND stock <= 5`)
+    } else if (availability === 'out-of-stock') {
+      conditions.push(`stock = 0`)
+    }
+
+    // Filter products by price
+    if (price) {
+      const [minPrice, maxPrice] = price.split('-')
+      if (minPrice && maxPrice) {
+        // Validate prices
+        const min = parseFloat(minPrice)
+        const max = parseFloat(maxPrice)
+        if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
+          return next(new ErrorHandler('Invalid price range format. Expected: min-max', 400))
+        }
+        conditions.push(`price BETWEEN $${index} AND $${index + 1}`)
+        values.push(min, max)
+        index += 2
+      }
+    }
+
+    // Filter products by category
+    if (category) {
+      conditions.push(`category ILIKE $${index}`)
+      values.push(`%${category}%`)
+      index++
+    }
+
+    // Filter products by rating
+    if (ratings) {
+      const rating = parseFloat(ratings)
+      if (isNaN(rating) || rating < 0 || rating > 5) {
+        return next(new ErrorHandler('Rating must be between 0 and 5', 400))
+      }
+      conditions.push(`ratings >= $${index}`)
+      values.push(rating)
+      index++
+    }
+
+    // Add search query
+    if (search) {
+      conditions.push(`(p.name ILIKE $${index} OR p.description ILIKE $${index})`)
+      values.push(`%${search}%`)
+      index++
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+
+    // Get count of filtered products
+    console.log(`📊 Counting filtered products...`)
+    const totalProductsResult = await database.query(
+      `SELECT COUNT(*) FROM products p ${whereClause}`,
+      values,
+    )
+
+    const totalProducts = parseInt(totalProductsResult.rows[0].count)
+    console.log(`✅ Total products found: ${totalProducts}`)
+
+    paginationPlaceholders.limit = `$${index}`
+    values.push(limit)
     index++
-  }
 
-  // Filter products by rating
-  if (ratings) {
-    conditions.push(`ratings >= $${index}`)
-    values.push(ratings)
+    paginationPlaceholders.offset = `$${index}`
+    values.push(offset)
     index++
-  }
 
-  // Add search query
-  if (search) {
-    conditions.push(`(p.name ILIKE $${index} OR p.description ILIKE $${index})`)
-    values.push(`%${search}%`)
-    index++
-  }
-
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-
-  // Get count of filtered products
-  const totalProductsResult = await database.query(
-    `SELECT COUNT(*) FROM products p ${whereClause}`,
-    values,
-  )
-
-  const totalProducts = parseInt(totalProductsResult.rows[0].count)
-
-  paginationPlaceholders.limit = `$${index}`
-  values.push(limit)
-  index++
-
-  paginationPlaceholders.offset = `$${index}`
-  values.push(offset)
-  index++
-
-  // FETCH WITH REVIEWS AND FEATURED STATUS
-  const query = `
-    SELECT p.*,
-    COUNT(r.id) AS review_count,
-    CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
-    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
-    FROM products p
-    LEFT JOIN reviews r ON p.id = r.product_id
-    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
-    ${whereClause}
-    GROUP BY p.id, fp.id
-    ORDER BY p.created_at DESC
-    LIMIT ${paginationPlaceholders.limit}
-    OFFSET ${paginationPlaceholders.offset}
+    // FETCH WITH REVIEWS AND FEATURED STATUS
+    const query = `
+      SELECT p.*,
+      COUNT(r.id) AS review_count,
+      CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
+      CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
+      FROM products p
+      LEFT JOIN reviews r ON p.id = r.product_id
+      LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
+      ${whereClause}
+      GROUP BY p.id, fp.id
+      ORDER BY p.created_at DESC
+      LIMIT ${paginationPlaceholders.limit}
+      OFFSET ${paginationPlaceholders.offset}
     `
 
-  const result = await database.query(query, values)
+    console.log(`🔍 Executing main product query...`)
+    const result = await database.query(query, values)
+    console.log(`✅ Found ${result.rows.length} products for this page`)
 
-  // QUERY FOR FETCHING NEW PRODUCTS
-  const newProductsQuery = `
-    SELECT p.*,
-    COUNT(r.id) AS review_count,
-    true AS is_new,
-    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
-    FROM products p
-    LEFT JOIN reviews r ON p.id = r.product_id
-    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
-    WHERE p.created_at >= NOW() - INTERVAL '30 days'
-    GROUP BY p.id, fp.id
-    ORDER BY p.created_at DESC
-    LIMIT 8
-  `
-  const newProductsResult = await database.query(newProductsQuery)
+    // QUERY FOR FETCHING NEW PRODUCTS
+    const newProductsQuery = `
+      SELECT p.*,
+      COUNT(r.id) AS review_count,
+      true AS is_new,
+      CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
+      FROM products p
+      LEFT JOIN reviews r ON p.id = r.product_id
+      LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
+      WHERE p.created_at >= NOW() - INTERVAL '30 days'
+      GROUP BY p.id, fp.id
+      ORDER BY p.created_at DESC
+      LIMIT 8
+    `
+    const newProductsResult = await database.query(newProductsQuery)
 
-  // QUERY FOR FETCHING TOP RATING PRODUCTS (rating >= 4.5)
-  const topRatedQuery = `
-    SELECT p.*,
-    COUNT(r.id) AS review_count,
-    CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
-    CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
-    FROM products p
-    LEFT JOIN reviews r ON p.id = r.product_id
-    LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
-    WHERE p.ratings >= 4.5
-    GROUP BY p.id, fp.id
-    ORDER BY p.ratings DESC, p.created_at DESC
-    LIMIT 8
-  `
-  const topRatedResult = await database.query(topRatedQuery)
+    // QUERY FOR FETCHING TOP RATING PRODUCTS (rating >= 4.5)
+    const topRatedQuery = `
+      SELECT p.*,
+      COUNT(r.id) AS review_count,
+      CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
+      CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
+      FROM products p
+      LEFT JOIN reviews r ON p.id = r.product_id
+      LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
+      WHERE p.ratings >= 4.5
+      GROUP BY p.id, fp.id
+      ORDER BY p.ratings DESC, p.created_at DESC
+      LIMIT 8
+    `
+    const topRatedResult = await database.query(topRatedQuery)
 
-  res.status(200).json({
-    success: true,
-    products: result.rows,
-    totalProducts,
-    newProducts: newProductsResult.rows,
-    topRatedProducts: topRatedResult.rows,
-  })
+    console.log(`✅ [SUCCESS] Returning products:`, {
+      items: result.rows.length,
+      total: totalProducts,
+      newProducts: newProductsResult.rows.length,
+      topRated: topRatedResult.rows.length,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: 'Products fetched successfully',
+      products: result.rows,
+      totalProducts,
+      newProducts: newProductsResult.rows,
+      topRatedProducts: topRatedResult.rows,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error(`❌ [FETCH_ALL_PRODUCTS] Error:`, {
+      message: error.message,
+      stack: error.stack,
+      query: req.query,
+    })
+    throw error
+  }
 })
 
 export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
   const { name, description, price, category, stock } = req.body
 
-  if (!name || !description || !price || !category || !stock === undefined) {
-    return next(new ErrorHandler('Please provide complete product details.', 400))
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!uuidRegex.test(productId)) {
+    return next(new ErrorHandler('Invalid product ID format.', 404))
+  }
+
+  // For updates, at least one field must be provided
+  if (!name && !description && !price && !category && stock === undefined) {
+    return next(new ErrorHandler('Please provide at least one field to update.', 400))
   }
   const product = await database.query('SELECT * FROM products WHERE id = $1', [productId])
   if (product.rows.length === 0) {
@@ -215,19 +297,66 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  const result = await database.query(
-    `UPDATE products SET name = $1, description = $2, price = $3, category = $4, stock = $5, images = $6, updated_at = NOW() WHERE id = $7 RETURNING *`,
-    [name, description, price, category, stock, JSON.stringify(images), productId],
-  )
+  // Build dynamic UPDATE query for partial updates
+  const updateFields = []
+  const updateValues = []
+  let paramIndex = 1
+
+  if (name) {
+    updateFields.push(`name = $${paramIndex}`)
+    updateValues.push(name)
+    paramIndex++
+  }
+  if (description) {
+    updateFields.push(`description = $${paramIndex}`)
+    updateValues.push(description)
+    paramIndex++
+  }
+  if (price) {
+    updateFields.push(`price = $${paramIndex}`)
+    updateValues.push(price)
+    paramIndex++
+  }
+  if (category) {
+    updateFields.push(`category = $${paramIndex}`)
+    updateValues.push(category)
+    paramIndex++
+  }
+  if (stock !== undefined) {
+    updateFields.push(`stock = $${paramIndex}`)
+    updateValues.push(stock)
+    paramIndex++
+  }
+
+  // Always update images
+  updateFields.push(`images = $${paramIndex}`)
+  updateValues.push(JSON.stringify(images))
+  paramIndex++
+
+  if (updateFields.length === 0) {
+    return next(new ErrorHandler('No fields to update provided.', 400))
+  }
+
+  const updateQuery = `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`
+  updateValues.push(productId)
+
+  const result = await database.query(updateQuery, updateValues)
+
   res.status(200).json({
     success: true,
     message: 'Product updated successfully.',
-    updatedProduct: result.rows[0],
+    data: normalizeProduct(result.rows[0]),
   })
 })
 
 export const deleteProduct = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
+
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!uuidRegex.test(productId)) {
+    return next(new ErrorHandler('Invalid product ID format.', 404))
+  }
 
   const product = await database.query('SELECT * FROM products WHERE id = $1', [productId])
   if (product.rows.length === 0) {
@@ -260,8 +389,17 @@ export const deleteProduct = catchAsyncErrors(async (req, res, next) => {
 export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
 
-  const result = await database.query(
-    `
+  // Validate product ID - accept both UUID and numeric formats
+  if (!productId || typeof productId !== 'string' || productId.trim() === '') {
+    console.error(`❌ [FETCH_SINGLE_PRODUCT] Invalid product ID: ${productId}`)
+    return next(new ErrorHandler('Invalid product ID provided', 400))
+  }
+
+  console.log(`📖 [FETCH_SINGLE_PRODUCT] Fetching product ${productId}...`)
+
+  try {
+    const result = await database.query(
+      `
         SELECT p.*,
         COUNT(r.id) AS review_count,
         COALESCE(
@@ -279,146 +417,237 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
          FROM products p
          LEFT JOIN reviews r ON p.id = r.product_id
          LEFT JOIN users u ON r.user_id = u.id
-         WHERE p.id  = $1
+         WHERE p.id = $1
          GROUP BY p.id`,
-    [productId],
-  )
+      [productId],
+    )
 
-  res.status(200).json({
-    success: true,
-    message: 'Product fetched successfully.',
-    product: result.rows[0],
-  })
+    if (!result.rows || result.rows.length === 0) {
+      console.warn(`⚠️ [FETCH_SINGLE_PRODUCT] Product ${productId} not found`)
+      return next(new ErrorHandler(`Product with ID ${productId} not found`, 404))
+    }
+
+    const product = result.rows[0]
+    console.log(`✅ [FETCH_SINGLE_PRODUCT] Product found:`, {
+      id: product.id,
+      name: product.name,
+      reviews: product.review_count,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: 'Product fetched successfully.',
+      data: product,
+    })
+  } catch (error) {
+    console.error(`❌ [FETCH_SINGLE_PRODUCT] Error fetching product ${productId}:`, {
+      message: error.message,
+      stack: error.stack,
+    })
+    throw error
+  }
 })
 
 export const postProductReview = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
   const { rating, comment } = req.body
+  const userId = req.user?.id
 
-  if (!rating || !comment) {
-    return next(new ErrorHandler('Please provide rating and comment.', 400))
+  // Validate inputs
+  if (!userId) {
+    console.error(`❌ [POST_REVIEW] User not authenticated`)
+    return next(new ErrorHandler('User authentication required', 401))
   }
 
-  if (rating < 1 || rating > 5) {
-    return next(new ErrorHandler('Rating must be between 1 and 5.', 400))
+  if (!productId || typeof productId !== 'string' || productId.trim() === '') {
+    console.error(`❌ [POST_REVIEW] Invalid product ID: ${productId}`)
+    return next(new ErrorHandler('Invalid product ID', 400))
   }
 
-  const purchasheCheckQuery = `
-    SELECT oi.product_id
-    FROM order_items oi
-    JOIN orders o ON o.id = oi.order_id
-    JOIN payments p ON p.order_id = o.id
-    WHERE o.buyer_id = $1
-    AND oi.product_id = $2
-    AND p.payment_status = 'Paid'
-    LIMIT 1
-  `
+  if (!rating) {
+    console.error(`❌ [POST_REVIEW] Missing rating`)
+    return next(new ErrorHandler('Please provide a rating', 400))
+  }
 
-  const { rows } = await database.query(purchasheCheckQuery, [req.user.id, productId])
+  const ratingNum = parseInt(rating)
+  if (isNaN(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+    console.error(`❌ [POST_REVIEW] Invalid rating: ${rating}`)
+    return next(new ErrorHandler('Rating must be a number between 1 and 5', 400))
+  }
 
-  if (rows.length === 0) {
-    return res.status(403).json({
-      success: false,
-      message: "You can only review a product you've purchased.",
+  if (!comment || typeof comment !== 'string' || comment.trim().length === 0) {
+    console.error(`❌ [POST_REVIEW] Missing or invalid comment`)
+    return next(new ErrorHandler('Please provide a comment', 400))
+  }
+
+  console.log(`⭐ [POST_REVIEW] Processing review for product ${productId} by user ${userId}`)
+
+  try {
+    // Check if product exists
+    const productCheck = await database.query('SELECT id FROM products WHERE id = $1', [productId])
+    if (productCheck.rows.length === 0) {
+      console.warn(`⚠️ [POST_REVIEW] Product ${productId} not found`)
+      return next(new ErrorHandler('Product not found', 404))
+    }
+
+    // Verify user has purchased the product
+    const purchaseCheckQuery = `
+      SELECT oi.product_id
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      JOIN payments p ON p.order_id = o.id
+      WHERE o.buyer_id = $1
+      AND oi.product_id = $2
+      AND p.payment_status = 'Paid'
+      LIMIT 1
+    `
+
+    const { rows: purchaseRows } = await database.query(purchaseCheckQuery, [userId, productId])
+
+    if (purchaseRows.length === 0) {
+      console.warn(`⚠️ [POST_REVIEW] User ${userId} has not purchased product ${productId}`)
+      return res.status(403).json({
+        success: false,
+        message: "You can only review products you've purchased",
+      })
+    }
+
+    console.log(`✅ [POST_REVIEW] Purchase verified for user ${userId}`)
+
+    // Check if user already reviewed this product
+    const existingReview = await database.query(
+      `SELECT * FROM reviews WHERE product_id = $1 AND user_id = $2`,
+      [productId, userId],
+    )
+
+    let review
+
+    if (existingReview.rows.length > 0) {
+      console.log(`🔄 [POST_REVIEW] Updating existing review...`)
+      review = await database.query(
+        'UPDATE reviews SET rating = $1, comment = $2, updated_at = NOW() WHERE product_id = $3 AND user_id = $4 RETURNING *',
+        [ratingNum, comment.trim(), productId, userId],
+      )
+    } else {
+      console.log(`📝 [POST_REVIEW] Creating new review...`)
+      review = await database.query(
+        'INSERT INTO reviews (product_id, user_id, rating, comment) VALUES ($1, $2, $3, $4) RETURNING *',
+        [productId, userId, ratingNum, comment.trim()],
+      )
+    }
+
+    // Calculate average rating
+    const avgRatingResult = await database.query(
+      `SELECT AVG(rating::NUMERIC) AS avg_rating, COUNT(*) AS total_reviews FROM reviews WHERE product_id = $1`,
+      [productId],
+    )
+
+    const newAvgRating = avgRatingResult.rows[0]?.avg_rating
+      ? parseFloat(avgRatingResult.rows[0].avg_rating)
+      : 0
+    const totalReviews = parseInt(avgRatingResult.rows[0]?.total_reviews || 0)
+
+    // Update product rating
+    await database.query('UPDATE products SET ratings = $1 WHERE id = $2', [
+      newAvgRating,
+      productId,
+    ])
+
+    console.log(`✅ [POST_REVIEW] Review processed successfully:`, {
+      reviewId: review.rows[0].id,
+      newAvgRating,
+      totalReviews,
     })
+
+    res.status(201).json({
+      success: true,
+      message:
+        existingReview.rows.length > 0
+          ? 'Review updated successfully'
+          : 'Review posted successfully',
+      review: review.rows[0],
+      productRating: newAvgRating,
+      totalReviews,
+    })
+  } catch (error) {
+    console.error(`❌ [POST_REVIEW] Error:`, {
+      message: error.message,
+      stack: error.stack,
+      productId,
+      userId,
+    })
+    throw error
   }
-
-  const product = await database.query('SELECT * FROM products WHERE id = $1', [productId])
-  if (product.rows.length === 0) {
-    return next(new ErrorHandler('Product not found.', 404))
-  }
-
-  const isAlreadyReviewed = await database.query(
-    `SELECT * FROM reviews WHERE product_id = $1 AND user_id = $2`,
-    [productId, req.user.id],
-  )
-
-  let review
-
-  if (isAlreadyReviewed.rows.length > 0) {
-    review = await database.query(
-      'UPDATE reviews SET rating = $1, comment = $2 WHERE product_id = $3 AND user_id = $4 RETURNING *',
-      [rating, comment, productId, req.user.id],
-    )
-  } else {
-    review = await database.query(
-      'INSERT INTO reviews (product_id, user_id, rating, comment) VALUES ($1, $2, $3, $4) RETURNING *',
-      [productId, req.user.id, rating, comment],
-    )
-  }
-
-  // Get all reviews for average
-  const allReviews = await database.query(
-    `SELECT AVG(rating::NUMERIC) AS avg_rating, COUNT(*) AS total_reviews FROM reviews WHERE product_id = $1`,
-    [productId],
-  )
-
-  const newAvgRating = allReviews.rows[0].avg_rating ? parseFloat(allReviews.rows[0].avg_rating) : 0
-
-  const updatedProduct = await database.query(
-    `UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *`,
-    [Math.round(newAvgRating * 10) / 10, productId],
-  )
-
-  // Fetch all reviews with user info for the response
-  const allReviewsWithUserInfo = await database.query(
-    `SELECT r.*, u.name as user_name FROM reviews r
-     JOIN users u ON r.user_id = u.id
-     WHERE r.product_id = $1
-     ORDER BY r.created_at DESC`,
-    [productId],
-  )
-
-  res.status(200).json({
-    success: true,
-    message: 'Review posted successfully.',
-    review: review.rows[0],
-    reviews: allReviewsWithUserInfo.rows,
-    product: updatedProduct.rows[0],
-  })
 })
 
 export const deleteReview = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
+  const userId = req.user?.id
 
-  const review = await database.query(
-    'DELETE FROM reviews WHERE product_id = $1 AND user_id = $2 RETURNING *',
-    [productId, req.user.id],
-  )
-
-  if (review.rows.length === 0) {
-    return next(new ErrorHandler('Review not found.', 404))
+  // Validate inputs
+  if (!userId) {
+    console.error(`❌ [DELETE_REVIEW] User not authenticated`)
+    return next(new ErrorHandler('User authentication required', 401))
   }
 
-  // Get updated average rating
-  const allReviews = await database.query(
-    `SELECT AVG(rating::NUMERIC) AS avg_rating FROM reviews WHERE product_id = $1`,
-    [productId],
-  )
+  if (!productId || typeof productId !== 'string' || productId.trim() === '') {
+    console.error(`❌ [DELETE_REVIEW] Invalid product ID: ${productId}`)
+    return next(new ErrorHandler('Invalid product ID', 400))
+  }
 
-  const newAvgRating = allReviews.rows[0].avg_rating ? parseFloat(allReviews.rows[0].avg_rating) : 0
+  console.log(`🗑️ [DELETE_REVIEW] Deleting review for product ${productId} by user ${userId}`)
 
-  const updatedProduct = await database.query(
-    `UPDATE products SET ratings = $1 WHERE id = $2 RETURNING *`,
-    [Math.round(newAvgRating * 10) / 10, productId],
-  )
+  try {
+    const review = await database.query(
+      'DELETE FROM reviews WHERE product_id = $1 AND user_id = $2 RETURNING *',
+      [productId, userId],
+    )
 
-  // Fetch all reviews with user info
-  const allReviewsWithUserInfo = await database.query(
-    `SELECT r.*, u.name as user_name FROM reviews r
-     JOIN users u ON r.user_id = u.id
-     WHERE r.product_id = $1
-     ORDER BY r.created_at DESC`,
-    [productId],
-  )
+    if (review.rows.length === 0) {
+      console.warn(`⚠️ [DELETE_REVIEW] No review found for user ${userId} on product ${productId}`)
+      return next(new ErrorHandler('Review not found', 404))
+    }
 
-  res.status(200).json({
-    success: true,
-    message: 'Your review has been deleted.',
-    review: review.rows[0],
-    reviews: allReviewsWithUserInfo.rows,
-    product: updatedProduct.rows[0],
-  })
+    console.log(`✅ [DELETE_REVIEW] Review deleted, recalculating product rating...`)
+
+    // Recalculate average rating
+    const avgRatingResult = await database.query(
+      `SELECT AVG(rating::NUMERIC) AS avg_rating, COUNT(*) AS total_reviews FROM reviews WHERE product_id = $1`,
+      [productId],
+    )
+
+    const newAvgRating = avgRatingResult.rows[0]?.avg_rating
+      ? parseFloat(avgRatingResult.rows[0].avg_rating)
+      : 0
+    const totalReviews = parseInt(avgRatingResult.rows[0]?.total_reviews || 0)
+
+    // Update product rating
+    await database.query('UPDATE products SET ratings = $1 WHERE id = $2', [
+      newAvgRating,
+      productId,
+    ])
+
+    console.log(`✅ [DELETE_REVIEW] Completed:`, {
+      productId,
+      newAvgRating,
+      totalReviews,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: 'Review deleted successfully',
+      productRating: newAvgRating,
+      totalReviews,
+    })
+  } catch (error) {
+    console.error(`❌ [DELETE_REVIEW] Error:`, {
+      message: error.message,
+      stack: error.stack,
+      productId,
+      userId,
+    })
+    throw error
+  }
 })
 
 export const fetchAIFilteredProducts = catchAsyncErrors(async (req, res, next) => {

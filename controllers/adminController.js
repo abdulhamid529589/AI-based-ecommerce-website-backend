@@ -90,13 +90,13 @@ export const updateUser = catchAsyncErrors(async (req, res, next) => {
   }
 
   if (password) {
-    if (password.length < 6) {
-      return next(new ErrorHandler('Password must be at least 6 characters long', 400))
+    if (password.length < 8) {
+      return next(new ErrorHandler('Password must be at least 8 characters long', 400))
     }
-    // Note: In production, you should hash the password
-    // For now, storing as plain text (not recommended)
+    // ✅ CRITICAL FIX: Hash password before storing
+    const hashedPassword = await bcrypt.hash(password, 10)
     updateFields.push(`password = $${index}`)
-    values.push(password)
+    values.push(hashedPassword) // ✅ Store hashed password, NOT plain text
     index++
   }
 
@@ -252,21 +252,33 @@ export const dashboardStats = catchAsyncErrors(async (req, res, next) => {
 
   const newUsersThisMonth = parseInt(newUsersThisMonthQuery.rows[0].count) || 0
 
+  // Calculate total orders
+  const totalOrdersQuery = await database.query(`
+    SELECT COUNT(*) FROM orders
+  `)
+  const totalOrders = parseInt(totalOrdersQuery.rows[0].count) || 0
+
   // FINAL RESPONSE
   res.status(200).json({
     success: true,
     message: 'Dashboard Stats Fetched Successfully',
-    totalRevenueAllTime,
-    todayRevenue,
-    yesterdayRevenue,
-    totalUsersCount,
-    orderStatusCounts,
-    monthlySales,
-    currentMonthSales,
-    topSellingProducts,
-    lowStockProducts,
-    revenueGrowth,
-    newUsersThisMonth,
+    data: {
+      totalOrders,
+      totalRevenue: totalRevenueAllTime,
+      totalCustomers: totalUsersCount,
+      totalRevenueAllTime,
+      todayRevenue,
+      yesterdayRevenue,
+      totalUsersCount,
+      orderStatusCounts,
+      monthlySales,
+      currentMonthSales,
+      topSellingProducts,
+      lowStockProducts,
+      revenueGrowth,
+      newUsersThisMonth,
+    },
+    timestamp: new Date().toISOString(),
   })
 })
 export const getRevenueAnalytics = catchAsyncErrors(async (req, res, next) => {

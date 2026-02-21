@@ -6,10 +6,15 @@ import crypto from 'crypto'
  * Prevents manipulation of prices, quantities, and totals in transit
  */
 
-// Use environment variable or fallback (change in production!)
-const ORDER_SIGNATURE_SECRET =
-  process.env.ORDER_SIGNATURE_SECRET ||
-  'your-secure-order-signature-secret-key-change-in-production'
+// ✅ MEDIUM FIX: Throw error if secret not configured instead of using insecure fallback
+if (!process.env.ORDER_SIGNATURE_SECRET) {
+  throw new Error(
+    'ORDER_SIGNATURE_SECRET environment variable not configured. Generate with: ' +
+      "node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+  )
+}
+
+const ORDER_SIGNATURE_SECRET = process.env.ORDER_SIGNATURE_SECRET
 
 /**
  * Create HMAC signature for order data

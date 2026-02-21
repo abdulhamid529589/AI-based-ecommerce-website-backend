@@ -24,29 +24,38 @@ export const sendToken = (user, statusCode, message, res) => {
     expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || '7d',
   })
 
-  console.log(`✅ Generated tokens for user ID: ${user.id}`)
-  console.log(`   Access Token length: ${accessToken.length} chars`)
-  console.log(`   Refresh Token length: ${refreshToken.length} chars`)
+  // ✅ HIGH FIX: Only log in development to avoid exposing user IDs
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`✅ Generated tokens for user ID: ${user.id}`)
+    console.log(`   Access Token length: ${accessToken.length} chars`)
+    console.log(`   Refresh Token length: ${refreshToken.length} chars`)
+  }
 
   res
     .status(statusCode)
     .cookie('token', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
-      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
+      secure: true, // ✅ CRITICAL: Always require HTTPS
+      domain: process.env.COOKIE_DOMAIN || undefined,
+      path: '/',
     })
     .cookie('accessToken', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
-      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
+      secure: true, // ✅ CRITICAL: Always require HTTPS
+      domain: process.env.COOKIE_DOMAIN || undefined,
+      path: '/',
     })
     .cookie('refreshToken', refreshToken, {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       httpOnly: true,
-      sameSite: 'Lax', // Allow cross-site requests for frontend/dashboard
-      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
+      secure: true, // ✅ CRITICAL: Always require HTTPS
+      domain: process.env.COOKIE_DOMAIN || undefined,
+      path: '/',
     })
     .json({
       success: true,

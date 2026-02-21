@@ -7,6 +7,16 @@ import { logOrderCreation, logValidationFailure } from '../utils/auditLogger.js'
 
 export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
   try {
+    console.log('🔹 [Order Controller] Received order creation request')
+    console.log('🔹 [Order Controller] Headers:', {
+      'X-Idempotency-Key': req.headers['x-idempotency-key'] ? '✅' : '❌',
+      'X-Request-ID': req.headers['x-request-id'] ? '✅' : '❌',
+      'X-CSRF-Token': req.headers['x-csrf-token'] ? '✅' : '❌',
+      Authorization: req.headers.authorization ? '✅' : '❌',
+    })
+    console.log('🔹 [Order Controller] User ID:', req.user?.id)
+    console.log('🔹 [Order Controller] Payload keys:', Object.keys(req.body))
+
     const {
       full_name,
       state,
@@ -27,6 +37,7 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     // 🔒 VALIDATE AND SANITIZE ALL INPUT
     let validatedData
     try {
+      console.log('🔹 [Order Controller] Validating order data...')
       validatedData = validateOrderData({
         full_name,
         state,
@@ -38,7 +49,9 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
         orderedItems,
         paymentMethod,
       })
+      console.log('🔹 [Order Controller] Validation passed ✅')
     } catch (validationError) {
+      console.error('🔹 [Order Controller] Validation failed:', validationError.message)
       // Log validation failure for security monitoring
       await logValidationFailure(
         req.user.id,
@@ -50,9 +63,10 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     }
 
     // 🔒 CRITICAL FIX #7: Check for idempotency key to prevent duplicate charges
-    const idempotencyKey = req.headers['idempotency-key']
+    // Support both 'X-Idempotency-Key' (standard) and 'idempotency-key' (fallback)
+    const idempotencyKey = req.headers['x-idempotency-key'] || req.headers['idempotency-key']
     if (!idempotencyKey) {
-      return next(new ErrorHandler('Idempotency-Key header required for order creation', 400))
+      return next(new ErrorHandler('X-Idempotency-Key header required for order creation', 400))
     }
 
     // Check if order already created with this idempotency key
@@ -214,23 +228,17 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       })
     }
 
-    // For online payments, generate Stripe payment intent
-    const paymentResponse = await generatePaymentIntent(orderId, total_price)
-
-    if (!paymentResponse.success) {
-      return next(new ErrorHandler('Payment failed. Try again.', 500))
-    }
-
-    // 🔒 Log order creation for online payment
-    await logOrderCreation(req.user.id, orderId, total_price, 'Stripe', 'SUCCESS')
+    // 🔒 Log order creation for payment
+    await logOrderCreation(req.user.id, orderId, total_price, payment_method, 'SUCCESS')
 
     res.status(200).json({
       success: true,
       message: 'Order placed successfully. Please proceed to payment.',
-      paymentIntent: paymentResponse.clientSecret,
+      orderId,
       total_price,
       tax_price,
       shipping_price,
+      paymentMethod: payment_method,
     })
   } catch (error) {
     console.error('Order creation error:', error.message)
@@ -342,7 +350,33 @@ ORDER BY o.created_at DESC
 })
 
 export const fetchAllOrders = catchAsyncErrors(async (req, res, next) => {
-  const result = await database.query(`
+  console.log(`📦 fetchAllOrders called - User: ${req.user?.name}, Role: ${req.user?.role}`)
+
+  // Get query parameters for filtering and pagination
+  const { status, page = 1, limit = 10 } = req.query
+  const pageNum = Math.max(1, parseInt(page) || 1)
+  const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 10)) // Max 100 per page
+  const offset = (pageNum - 1) * limitNum
+
+  // Build WHERE clause for filtering
+  let whereClause = ''
+  const queryParams = []
+
+  if (status) {
+    whereClause = 'WHERE o.order_status = $1'
+    queryParams.push(status)
+  }
+
+  // Get total count first
+  const countQuery = `SELECT COUNT(DISTINCT o.id) as count FROM orders o ${whereClause}`
+  const countResult = await database.query(countQuery, queryParams)
+  const totalCount = parseInt(countResult.rows[0].count)
+  const totalPages = Math.ceil(totalCount / limitNum)
+
+  // Get paginated results
+  const paramIndex = queryParams.length + 1
+  const result = await database.query(
+    `
             SELECT o.*,
  COALESCE(json_agg(
  json_build_object(
@@ -381,22 +415,55 @@ LEFT JOIN order_items oi ON o.id = oi.order_id
 LEFT JOIN shipping_info s ON o.id = s.order_id
 LEFT JOIN users u ON o.buyer_id = u.id
 LEFT JOIN payments p ON o.id = p.order_id
+${whereClause}
 GROUP BY o.id, s.id, u.id, p.id
 ORDER BY o.created_at DESC
-        `)
+LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `,
+    [...queryParams, limitNum, offset],
+  )
 
+  console.log(`✅ Orders query returned ${result.rows.length} rows`)
   res.status(200).json({
     success: true,
     message: 'All orders fetched.',
-    orders: result.rows,
+    data: {
+      orders: result.rows,
+    },
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      totalCount,
+      totalPages,
+    },
   })
 })
 
 export const updateOrderStatus = catchAsyncErrors(async (req, res, next) => {
-  const { status } = req.body
+  // Accept both 'status' and 'order_status' for flexibility
+  let status = req.body.status || req.body.order_status
   if (!status) {
     return next(new ErrorHandler('Provide a valid status for order.', 400))
   }
+
+  // Normalize status to match database constraints
+  const validStatuses = {
+    processing: 'Processing',
+    shipped: 'Shipped',
+    delivered: 'Delivered',
+    cancelled: 'Cancelled',
+  }
+
+  const normalizedStatus = validStatuses[status.toLowerCase()]
+  if (!normalizedStatus) {
+    return next(
+      new ErrorHandler(
+        'Invalid status. Allowed values: Processing, Shipped, Delivered, Cancelled',
+        400,
+      ),
+    )
+  }
+
   const { orderId } = req.params
   const results = await database.query(
     `
@@ -413,13 +480,13 @@ export const updateOrderStatus = catchAsyncErrors(async (req, res, next) => {
     `
     UPDATE orders SET order_status = $1 WHERE id = $2 RETURNING *
     `,
-    [status, orderId],
+    [normalizedStatus, orderId],
   )
 
   res.status(200).json({
     success: true,
     message: 'Order status updated.',
-    updatedOrder: updatedOrder.rows[0],
+    data: updatedOrder.rows[0],
   })
 })
 

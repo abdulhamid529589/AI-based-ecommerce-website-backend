@@ -1,4 +1,6 @@
 import express from 'express'
+import { isAuthenticated, authorizedRoles } from '../middlewares/authMiddleware.js' // ✅ Add auth import
+import { idempotencyKeyMiddleware } from '../middlewares/idempotencyKeyMiddleware.js'
 import {
   initiateBkashPayment,
   bkashPaymentCallback,
@@ -12,22 +14,25 @@ import {
 
 const router = express.Router()
 
-// bKash routes
-router.post('/bkash/initiate', initiateBkashPayment)
+// 🔑 IDEMPOTENCY KEY MIDDLEWARE - Prevents duplicate charges
+// Applied to all payment initiation routes
+
+// bKash routes - ✅ Add auth + idempotency key
+router.post('/bkash/initiate', isAuthenticated, idempotencyKeyMiddleware, initiateBkashPayment)
 router.get('/bkash/callback', bkashPaymentCallback)
 
-// Nagad routes
-router.post('/nagad/initiate', initiateNagadPayment)
+// Nagad routes - ✅ Add auth + idempotency key
+router.post('/nagad/initiate', isAuthenticated, idempotencyKeyMiddleware, initiateNagadPayment)
 router.post('/nagad/callback', nagadPaymentCallback)
 
-// Rocket routes
-router.post('/rocket/initiate', initiateRocketPayment)
+// Rocket routes - ✅ Add auth + idempotency key
+router.post('/rocket/initiate', isAuthenticated, idempotencyKeyMiddleware, initiateRocketPayment)
 router.post('/rocket/callback', rocketPaymentCallback)
 
-// Cash on Delivery
-router.post('/cod/initiate', initiateCODPayment)
+// Cash on Delivery - ✅ Add auth + idempotency key
+router.post('/cod/initiate', isAuthenticated, idempotencyKeyMiddleware, initiateCODPayment)
 
-// Get payment status
-router.get('/status/:orderId', getPaymentStatus)
+// Get payment status - ✅ Add auth
+router.get('/status/:orderId', isAuthenticated, getPaymentStatus)
 
 export default router

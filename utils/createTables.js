@@ -11,6 +11,19 @@ import {
   createFeaturedProductsTable,
 } from '../models/settingsTable.js'
 import createAuditLogsTable from '../models/auditLogsTable.js'
+import createPromotionsTable from '../models/promotionsTable.js'
+import {
+  createPagesTable,
+  createHomepageSectionsTable,
+  createMenuItemsTable,
+  createEmailTemplatesTable,
+  createNotificationSettingsTable,
+  createSeoSettingsTable,
+  createComponentSettingsTable,
+  createFooterContentTable,
+  createPromotionalBannersTable,
+  createGlobalSettingsTable,
+} from '../models/contentTablesModel.js'
 
 export const createTables = async () => {
   try {
@@ -26,6 +39,22 @@ export const createTables = async () => {
     await createFeaturedProductsTable()
     // 🔒 Create audit logs table for security monitoring
     await createAuditLogsTable()
+
+    // � Promotions & Discounts
+    await createPromotionsTable()
+
+    // �🎨 Content Management Tables
+    await createPagesTable()
+    await createHomepageSectionsTable()
+    await createMenuItemsTable()
+    await createEmailTemplatesTable()
+    await createNotificationSettingsTable()
+    await createSeoSettingsTable()
+    await createComponentSettingsTable()
+    await createFooterContentTable()
+    await createPromotionalBannersTable()
+    await createGlobalSettingsTable()
+
     console.log('All Tables Created Successfully.')
   } catch (error) {
     console.error('Error creating tables:', error)

@@ -11,7 +11,7 @@ import crypto from 'crypto'
 import { v2 as cloudinary } from 'cloudinary'
 
 export const register = catchAsyncErrors(async (req, res, next) => {
-  const { name, email, mobile, password, role } = req.body
+  let { name, email, mobile, password, role } = req.body
 
   // Validate inputs
   if (!name || !password) {
@@ -22,8 +22,10 @@ export const register = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Please provide either email or mobile number.', 400))
   }
 
-  if (password.length < 8 || password.length > 16) {
-    return next(new ErrorHandler('Password must be between 8 and 16 characters.', 400))
+  // ✅ Simple password requirement: at least 8 characters
+  // No format restrictions - user friendly approach
+  if (!password || password.length < 8) {
+    return next(new ErrorHandler('🔐 Password must be at least 8 characters long', 400))
   }
 
   // Validate mobile format if provided (Bangladeshi format)
@@ -31,28 +33,35 @@ export const register = catchAsyncErrors(async (req, res, next) => {
     // Remove all non-digit characters to validate
     const digitsOnly = mobile.replace(/\D/g, '')
 
-    // Bangladesh mobile: 10-11 digits (01XXXXXXXXX) or +880 format
-    // Accepted formats:
-    // - Local: 01XXXXXXXXX (11 digits)
-    // - International: +8801XXXXXXXXX (13 digits including +88)
-    if (
-      !(
-        (digitsOnly.length === 11 && digitsOnly.startsWith('1')) ||
-        (digitsOnly.length === 13 && digitsOnly.startsWith('880'))
-      )
-    ) {
+    // Bangladesh mobile: Accept these formats:
+    // - Local format: 01XXXXXXXXX (11 digits, starts with 0)
+    // - Local format without 0: 1XXXXXXXXX (10 digits, starts with 1)
+    // - International format: 880XXXXXXXXX (12 digits, starts with 880)
+    const isValidBDMobile =
+      (digitsOnly.length === 11 && digitsOnly.startsWith('0')) || // 01843964511
+      (digitsOnly.length === 10 && digitsOnly.startsWith('1')) || // 1843964511
+      (digitsOnly.length === 12 && digitsOnly.startsWith('880')) // 880XXXXXXXXX
+
+    if (!isValidBDMobile) {
       return next(
         new ErrorHandler(
-          'Please provide a valid Bangladesh mobile number (+880 1XX XXX XXXX or 01XXXXXXXXX).',
+          '📱 Please provide a valid Bangladesh mobile number (e.g., 01843964511 or +880 18439645111).',
           400,
         ),
       )
     }
 
-    // Normalize to international format for storage
-    const normalizedMobile = digitsOnly.startsWith('880')
-      ? '+' + digitsOnly
-      : '+880' + digitsOnly.slice(1)
+    // Normalize to international format for storage (+88XXXXXXXXX)
+    let normalizedMobile
+    if (digitsOnly.startsWith('880')) {
+      normalizedMobile = '+' + digitsOnly
+    } else if (digitsOnly.startsWith('0')) {
+      // 01843964511 → +880 1843964511
+      normalizedMobile = '+880' + digitsOnly.slice(1)
+    } else {
+      // 1843964511 → +880 1843964511
+      normalizedMobile = '+880' + digitsOnly
+    }
 
     // Check if mobile already exists
     const mobileExists = await database.query(`SELECT * FROM users WHERE mobile = $1`, [
@@ -95,10 +104,17 @@ export const login = catchAsyncErrors(async (req, res, next) => {
     // Normalize Bangladesh mobile number for login
     const digitsOnly = mobile.replace(/\D/g, '')
 
-    // Normalize to international format to match database storage
-    const normalizedMobile = digitsOnly.startsWith('880')
-      ? '+' + digitsOnly
-      : '+880' + digitsOnly.slice(1)
+    // Normalize to international format to match database storage (+880XXXXXXXXX)
+    let normalizedMobile
+    if (digitsOnly.startsWith('880')) {
+      normalizedMobile = '+' + digitsOnly
+    } else if (digitsOnly.startsWith('0')) {
+      // 01843964511 → +880 1843964511
+      normalizedMobile = '+880' + digitsOnly.slice(1)
+    } else {
+      // 1843964511 → +880 1843964511
+      normalizedMobile = '+880' + digitsOnly
+    }
 
     queryMobile = normalizedMobile
     user = await database.query(`SELECT * FROM users WHERE mobile = $1`, [normalizedMobile])
@@ -248,13 +264,8 @@ export const resetPassword = catchAsyncErrors(async (req, res, next) => {
   if (req.body.password !== req.body.confirmPassword) {
     return next(new ErrorHandler('Passwords do not match.', 400))
   }
-  if (
-    req.body.password?.length < 8 ||
-    req.body.password?.length > 16 ||
-    req.body.confirmPassword?.length < 8 ||
-    req.body.confirmPassword?.length > 16
-  ) {
-    return next(new ErrorHandler('Password must be between 8 and 16 characters.', 400))
+  if (!req.body.password || req.body.password.length < 8) {
+    return next(new ErrorHandler('🔐 Password must be at least 8 characters long', 400))
   }
   const hashedPassword = await bcrypt.hash(req.body.password, 10)
 
@@ -279,13 +290,8 @@ export const updatePassword = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('New passwords do not match.', 400))
   }
 
-  if (
-    newPassword.length < 8 ||
-    newPassword.length > 16 ||
-    confirmNewPassword.length < 8 ||
-    confirmNewPassword.length > 16
-  ) {
-    return next(new ErrorHandler('Password must be between 8 and 16 characters.', 400))
+  if (!newPassword || newPassword.length < 8) {
+    return next(new ErrorHandler('🔐 Password must be at least 8 characters long', 400))
   }
 
   const hashedPassword = await bcrypt.hash(newPassword, 10)

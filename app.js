@@ -13,12 +13,32 @@ import {
   globalErrorHandler,
   rateLimitMiddleware,
 } from './middlewares/errorHandlerMiddleware.js'
+import {
+  authLimiter,
+  paymentLimiter,
+  apiLimiter,
+  sanitizeInput,
+  requestSizeLimit,
+  securityHeaders,
+  suspiciousActivityLogger,
+  cacheControlHeaders,
+} from './middlewares/securityMiddleware.js'
+import { isAuthenticated } from './middlewares/authMiddleware.js'
 import authRouter from './router/authRoutes.js'
 import productRouter from './router/productRoutes.js'
 import adminRouter from './router/adminRoutes.js'
 import orderRouter from './router/orderRoutes.js'
 import paymentGatewayRouter from './router/paymentGatewayRoutes.js'
-import Stripe from 'stripe'
+import contentRouter from './router/contentRoutes.js'
+import searchRouter from './routes/searchRoutes.js'
+import feedRouter from './routes/feedRoutes.js'
+import notificationRouter from './routes/notificationRoutes.js'
+import analyticsRouter from './router/analyticsRoutes.js'
+import checkoutRouter from './routes/checkoutRoutes.js'
+import customerRouter from './router/customerRoutes.js'
+import wishlistRouter from './routes/wishlistRoutes.js'
+import cartRouter from './routes/cartRoutes.js'
+import reviewRouter from './routes/reviewRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -48,58 +68,19 @@ app.use(
     origin: allowedOrigins.length > 0 ? allowedOrigins : true, // If no origins specified, allow all (dev only)
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-XSRF-Token'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-CSRF-Token',
+      'X-XSRF-Token',
+      'X-Idempotency-Key',
+      'X-Request-ID',
+    ],
   }),
 )
 
-// Stripe webhook must be before JSON parser
-app.post('/api/v1/payment/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature']
-  let event
-  try {
-    event = Stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET)
-  } catch (error) {
-    return res.status(400).send(`Webhook Error: ${error.message || error}`)
-  }
-
-  // Handling the Event
-
-  if (event.type === 'payment_intent.succeeded') {
-    const paymentIntent_client_secret = event.data.object.client_secret
-    try {
-      // FINDING AND UPDATED PAYMENT
-      const updatedPaymentStatus = 'Paid'
-      const paymentTableUpdateResult = await database.query(
-        `UPDATE payments SET payment_status = $1 WHERE payment_intent_id = $2 RETURNING *`,
-        [updatedPaymentStatus, paymentIntent_client_secret],
-      )
-      await database.query(`UPDATE orders SET paid_at = NOW() WHERE id = $1 RETURNING *`, [
-        paymentTableUpdateResult.rows[0].order_id,
-      ])
-
-      // Reduce Stock For Each Product
-      const orderId = paymentTableUpdateResult.rows[0].order_id
-
-      const { rows: orderedItems } = await database.query(
-        `
-            SELECT product_id, quantity FROM order_items WHERE order_id = $1
-          `,
-        [orderId],
-      )
-
-      // For each ordered item, reduce the product stock
-      for (const item of orderedItems) {
-        await database.query(`UPDATE products SET stock = stock - $1 WHERE id = $2`, [
-          item.quantity,
-          item.product_id,
-        ])
-      }
-    } catch (error) {
-      return res.status(500).send(`Error updating paid_at timestamp in orders table.`)
-    }
-  }
-  res.status(200).send({ received: true })
-})
+// Payment webhook handlers are managed by payment gateway controllers
+// (bKash, Nagad, Rocket, Cash on Delivery)
 
 // Security middleware - apply before routes
 // Add security headers with CSP
@@ -108,12 +89,13 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net', 'js.stripe.com'],
+        // ✅ MEDIUM FIX: Remove 'unsafe-inline' for scripts to prevent inline XSS
+        scriptSrc: ["'self'", 'cdn.jsdelivr.net'],
         styleSrc: ["'self'", "'unsafe-inline'", 'cdn.jsdelivr.net'],
         imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
         fontSrc: ["'self'", 'data:', 'cdn.jsdelivr.net'],
-        connectSrc: ["'self'", 'api.stripe.com'],
-        frameSrc: ["'self'", 'js.stripe.com'],
+        connectSrc: ["'self'", 'api.bkash.com', 'api.nagad.com.bd', 'api.rocket.co'],
+        frameSrc: ["'self'"],
         objectSrc: ["'none'"],
         mediaSrc: ["'self'"],
         childSrc: ["'self'"],
@@ -132,6 +114,13 @@ app.use(
   }),
 )
 app.disable('x-powered-by')
+
+// ✅ Phase 3 Security Middleware - Apply early in stack
+app.use(securityHeaders) // Add security headers
+app.use(cacheControlHeaders) // Add cache control headers
+app.use(requestSizeLimit) // Check request size
+app.use(sanitizeInput) // Sanitize XSS from inputs
+app.use(suspiciousActivityLogger) // Log suspicious patterns
 
 // Standard middleware
 app.use(cookieParser())
@@ -171,17 +160,22 @@ const generateCSRFToken = () => {
 // Validate CSRF token
 const validateCSRFToken = (token) => {
   if (!token || !csrfTokens.has(token)) {
+    console.warn('⚠️ CSRF validation failed: token not found or expired')
     return false
   }
 
   const tokenData = csrfTokens.get(token)
   if (Date.now() > tokenData.expiresAt) {
+    console.warn('⚠️ CSRF validation failed: token expired')
     csrfTokens.delete(token)
     return false
   }
 
-  // Delete token after validation (one-time use)
-  csrfTokens.delete(token)
+  // ✅ FIXED: Do NOT delete token after validation
+  // CSRF tokens should be reusable for their TTL duration
+  // This allows frontend to retry requests without needing a new token
+  // Tokens are automatically cleaned up when they expire
+
   return true
 }
 
@@ -192,10 +186,41 @@ app.get('/api/v1/csrf-token', (req, res) => {
   res.json({ csrfToken: token, success: true })
 })
 
+// DEBUG: Endpoint to check current user's token role
+app.get('/api/v1/debug/token-role', isAuthenticated, (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  let tokenRole = 'unknown'
+  if (token) {
+    try {
+      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString())
+      tokenRole = payload.role
+    } catch (e) {
+      tokenRole = 'decode-error'
+    }
+  }
+  res.json({
+    dbRole: req.user?.role,
+    tokenRole: tokenRole,
+    userId: req.user?.id,
+    userName: req.user?.name,
+    match: req.user?.role === tokenRole,
+  })
+})
+
 // CSRF validation middleware
 const csrfMiddleware = (req, res, next) => {
+  // 🔍 DEBUG: Log CSRF middleware activity
+  console.log(`🔒 CSRF Check - Method: ${req.method}, Path: ${req.path}`)
+
   // Only validate CSRF for state-changing requests
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+    // Auth routes and CSRF token endpoint DON'T need CSRF tokens
+    // They use JWT authentication instead
+    if (req.path.startsWith('/auth') || req.path === '/csrf-token') {
+      console.log(`  ✅ Skipping CSRF for auth route`)
+      return next()
+    }
+
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
 
@@ -219,8 +244,11 @@ const csrfMiddleware = (req, res, next) => {
       })
     }
 
+    console.log(`  ✅ CSRF token validated`)
     next()
   } else {
+    // GET, HEAD, OPTIONS, etc - no CSRF needed
+    console.log(`  ✅ Skipping CSRF for ${req.method} request`)
     next()
   }
 }
@@ -233,7 +261,7 @@ const strictLimiter = rateLimit({
   skip: (req) => req.user?.role === 'Admin', // Exempt admins
 })
 
-const paymentLimiter = rateLimit({
+const paymentLimiter_legacy = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 3, // 3 payment attempts per minute
   message: 'Too many payment attempts, please try again later',
@@ -241,9 +269,6 @@ const paymentLimiter = rateLimit({
 
 // Apply rate limiting to all API routes
 app.use('/api/v1', rateLimitMiddleware)
-
-// Apply CSRF to API routes
-app.use('/api/v1', csrfMiddleware)
 
 // 🔒 Add additional security headers on every response
 app.use((req, res, next) => {
@@ -254,20 +279,51 @@ app.use((req, res, next) => {
   next()
 })
 
+// ✅ Response timestamp middleware - Inject timestamp into all success responses
+app.use((req, res, next) => {
+  const originalJson = res.json
+  res.json = function (data) {
+    // Only add timestamp if this is a success response and doesn't already have one
+    if (data && data.success === true && !data.timestamp) {
+      data.timestamp = new Date().toISOString()
+    }
+    return originalJson.call(this, data)
+  }
+  next()
+})
+
 // API Routes
-app.use('/api/v1/auth', authRouter)
-app.use('/api/v1/product', productRouter)
-app.use('/api/v1/admin', adminRouter)
-app.use('/api/v1/order', orderRouter)
-app.use('/api/v1/payment', paymentGatewayRouter)
+app.use('/api/v1/auth', authLimiter, authRouter) // ✅ Phase 3: Auth rate limiting - NO CSRF needed (JWT protected)
+app.use('/api/v1/product', csrfMiddleware, productRouter) // ✅ CSRF required for product mutations
+app.use('/api/v1/admin', csrfMiddleware, adminRouter) // ✅ CSRF required for admin routes
+app.use('/api/v1/order', csrfMiddleware, orderRouter) // ✅ CSRF required for orders
+app.use('/api/v1/payment', paymentLimiter, csrfMiddleware, paymentGatewayRouter) // ✅ Phase 3: Payment rate limiting
+app.use('/api/v1/content', csrfMiddleware, contentRouter) // ✅ CSRF required for content management
+app.use('/api/v1/search', searchRouter)
+app.use('/api/v1/feed', feedRouter)
+app.use('/api/v1/notifications', notificationRouter)
+app.use('/api/v1/analytics', analyticsRouter)
+app.use('/api/v1/checkout', csrfMiddleware, checkoutRouter) // ✅ CSRF required for checkout
+app.use('/api/v1/customer', csrfMiddleware, customerRouter) // ✅ CSRF required for customer operations
+
+// ✅ Phase 4: Advanced Features - Wishlist, Cart, Reviews
+app.use(wishlistRouter)
+app.use(cartRouter)
+app.use(reviewRouter)
+
+// ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
+app.use('/api/v1', apiLimiter)
 
 // Apply strict rate limiting to critical endpoints
 app.post('/api/v1/order/new', strictLimiter)
-app.post('/api/v1/payment/stripe', paymentLimiter)
 app.post('/api/v1/payment/bkash', paymentLimiter)
 app.post('/api/v1/payment/nagad', paymentLimiter)
 
-createTables()
+// Initialize database tables (non-blocking - errors logged but don't crash)
+createTables().catch((error) => {
+  console.warn('⚠️ Failed to initialize database tables:', error.message)
+  console.warn('⚠️ Server will continue running, but some features may not work properly')
+})
 
 // 🔒 CSRF Error handler - handle CSRF token mismatches gracefully
 app.use((err, req, res, next) => {
@@ -295,4 +351,8 @@ app.use(notFoundMiddleware)
 app.use(errorMiddleware)
 app.use(globalErrorHandler)
 
+// Export for both ES6 and CommonJS (Jest tests)
 export default app
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = app
+}

@@ -15,10 +15,13 @@ const database = new Pool({
   database: process.env.DB_NAME || 'Mern_Ecommerce_Store',
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT || 5432,
-  ssl: {
-    required: true,
-    rejectUnauthorized: false,
-  },
+  // ✅ LOW FIX: Only disable certificate validation in development
+  ssl:
+    process.env.NODE_ENV === 'production'
+      ? true
+      : {
+          rejectUnauthorized: false, // Allow self-signed certs in development only
+        },
   statement_timeout: 30000, // 30 second timeout for queries
   connectionTimeoutMillis: 10000, // 10 second connection timeout
   idleTimeoutMillis: 30000, // 30 second idle timeout
@@ -26,18 +29,29 @@ const database = new Pool({
 })
 
 // Handle pool errors
+// ✅ HIGH FIX: Don't expose database errors in production logs
 database.on('error', (err) => {
-  console.error('❌ Unexpected error on idle client in pool:', err.message)
+  if (process.env.NODE_ENV === 'development') {
+    console.error('❌ Unexpected error on idle client in pool:', err.message)
+  } else {
+    // In production, log securely without exposing details
+    console.error('❌ Database pool error occurred')
+  }
 })
 
-// Test connection on startup
-try {
-  const client = await database.connect()
-  console.log('Connected to the database successfully')
-  client.release()
-} catch (error) {
-  console.error('Database connection failed:', error.message)
-  process.exit(1)
-}
+// Test connection on startup (non-blocking)
+database
+  .connect()
+  .then((client) => {
+    console.log('✅ Connected to the database successfully')
+    client.release()
+  })
+  .catch((error) => {
+    console.error('⚠️ Database connection issue:', error.message)
+    console.error('⚠️ Server will continue running, but database operations may fail')
+  })
 
 export default database
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = database
+}
