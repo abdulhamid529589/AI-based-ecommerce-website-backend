@@ -6,6 +6,7 @@ import fileUpload from 'express-fileupload'
 import crypto from 'crypto'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import compression from 'compression'
 import { createTables } from './utils/createTables.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
 import {
@@ -82,6 +83,9 @@ app.use(
 
 // Payment webhook handlers are managed by payment gateway controllers
 // (bKash, Nagad, Rocket, Cash on Delivery)
+
+// Performance middleware - Enable gzip compression for responses
+app.use(compression({ level: 6, threshold: 1024 })) // Compress responses > 1KB
 
 // Security middleware - apply before routes
 // Add security headers with CSP

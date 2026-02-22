@@ -3,6 +3,7 @@ import { v2 as cloudinary } from 'cloudinary'
 import initializeDatabase from './database/alterUsersTable.js'
 import { initializeSentry } from './utils/sentryIntegration.js'
 import { initializeIdempotencyCleanup } from './utils/idempotencyKey.js'
+import { createPerformanceIndexes } from './utils/performanceOptimizations.js'
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLIENT_NAME,
@@ -38,9 +39,13 @@ await initializeSentry()
 // Initialize database schema on startup
 await initializeDatabase()
 
+// 🚀 Create performance indexes for optimal query speed
+await createPerformanceIndexes()
+
 // Initialize idempotency cleanup routine
 initializeIdempotencyCleanup()
 
 app.listen(process.env.PORT, () => {
-  console.log(`Server is running on port ${process.env.PORT}`)
+  console.log(`✅ Server is running on port ${process.env.PORT}`)
+  console.log(`🚀 Performance optimizations enabled (compression, indexing, caching)`)
 })
