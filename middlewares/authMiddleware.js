@@ -24,22 +24,22 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  // DEBUG: Log token sources for order/admin endpoints
-  if (req.path.includes('/order/admin')) {
-    console.log(`🔐 /order/admin token check:`, {
+  // DEBUG: Log token sources for ALL protected endpoints in development
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`🔐 [AUTH] ${req.method} ${req.path}`, {
       tokenSource,
-      hasCookieToken: !!req.cookies?.token || !!req.cookies?.accessToken,
-      hasAuthHeader: !!req.headers.authorization,
+      hasToken: !!token,
+      tokenLength: token ? token.length : 0,
+      cookies: Object.keys(req.cookies || {}),
+      authHeader: req.headers.authorization ? 'present' : 'missing',
     })
   }
 
   // ✅ CRITICAL FIX: Check for literal 'undefined' string in token
   if (!token || token === 'undefined' || token === null) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('⚠️ No token found in cookies or headers')
-      console.warn('   Cookies:', Object.keys(req.cookies || {}))
-      console.warn('   Authorization header:', req.headers.authorization ? 'present' : 'missing')
-    }
+    console.warn(`❌ [AUTH] No token found for ${req.method} ${req.path}`)
+    console.warn('   Cookies:', Object.keys(req.cookies || {}))
+    console.warn('   Authorization header:', req.headers.authorization ? 'present' : 'missing')
     return next(new ErrorHandler('Please login to access this resource.', 401))
   }
 

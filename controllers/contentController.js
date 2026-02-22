@@ -1,5 +1,6 @@
 import database from '../database/db.js'
 import { catchAsyncErrors } from '../utils/catchAsyncErrors.js'
+import { getSetting } from '../models/settingsTable.js'
 
 // ============================================
 // PAGE MANAGEMENT
@@ -633,4 +634,12 @@ export const updateGlobalSettings = catchAsyncErrors(async (req, res, next) => {
     success: true,
     data: result,
   })
+})
+
+// ============================================
+// CATEGORIES (Public - for frontend)
+// ============================================
+export const getCategories = catchAsyncErrors(async (req, res, next) => {
+  const categories = await getSetting('categories')
+  res.status(200).json(categories || [])
 })

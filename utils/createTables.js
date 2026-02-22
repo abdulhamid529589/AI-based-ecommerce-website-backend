@@ -12,6 +12,7 @@ import {
 } from '../models/settingsTable.js'
 import createAuditLogsTable from '../models/auditLogsTable.js'
 import createPromotionsTable from '../models/promotionsTable.js'
+import createNotificationsTable from '../models/notificationsTable.js'
 import {
   createPagesTable,
   createHomepageSectionsTable,
@@ -39,7 +40,8 @@ export const createTables = async () => {
     await createFeaturedProductsTable()
     // 🔒 Create audit logs table for security monitoring
     await createAuditLogsTable()
-
+    // 💬 Notifications System
+    await createNotificationsTable()
     // � Promotions & Discounts
     await createPromotionsTable()
 

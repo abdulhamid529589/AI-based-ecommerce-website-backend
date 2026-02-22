@@ -16,7 +16,43 @@ const normalizeProduct = (product) => {
 }
 
 export const createProduct = catchAsyncErrors(async (req, res, next) => {
+  // Required fields
   let { name, description, price, category, stock } = req.body
+
+  // Optional fields
+  const {
+    slug,
+    sku,
+    barcode,
+    short_description: shortDescription,
+    sale_price: salePrice,
+    cost_price: costPrice,
+    product_type: productType = 'simple',
+    weight,
+    weight_unit: weightUnit = 'kg',
+    length,
+    width,
+    height,
+    low_stock_threshold: lowStockThreshold = 10,
+    stock_status: stockStatus = 'in-stock',
+    allow_backorders: allowBackorders = false,
+    sold_individually: soldIndividually = false,
+    brand,
+    tags,
+    shipping_class: shippingClass = 'standard',
+    free_shipping: freeShipping = false,
+    meta_title: metaTitle,
+    meta_description: metaDescription,
+    focus_keyword: focusKeyword,
+    purchase_note: purchaseNote,
+    enable_reviews: enableReviews = true,
+    featured = false,
+    visibility = 'public',
+    catalog_visibility: catalogVisibility = 'visible',
+    image_alts: imageAlts,
+    menu_order: menuOrder = 0,
+  } = req.body
+
   const created_by = req.user.id
 
   // Sanitize string inputs to prevent XSS
@@ -31,14 +67,16 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
       .replace(/javascript:/gi, '')
   }
 
+  // Validate required fields
   name = sanitizeXSS(name)
   description = sanitizeXSS(description)
   category = sanitizeXSS(category)
 
-  if (!name || !description || !price || !category || !stock) {
-    return next(new ErrorHandler('Please provide complete product details.', 400))
+  if (!name || !description || !price || !category || stock === undefined) {
+    return next(new ErrorHandler('Please provide: name, description, price, category, stock', 400))
   }
 
+  // Upload images to Cloudinary
   let uploadedImages = []
   if (req.files && req.files.images) {
     const images = Array.isArray(req.files.images) ? req.files.images : [req.files.images]
@@ -57,15 +95,74 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  const product = await database.query(
-    `INSERT INTO products (name, description, price, category, stock, images, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [name, description, price, category, stock, JSON.stringify(uploadedImages), created_by],
-  )
+  // Prepare query with all optional fields
+  const query = `
+    INSERT INTO products (
+      name, description, price, category, stock, images, created_by,
+      slug, sku, barcode, short_description, sale_price, cost_price,
+      product_type, weight, weight_unit, length, width, height,
+      low_stock_threshold, stock_status, allow_backorders, sold_individually,
+      brand, tags, shipping_class, free_shipping, meta_title, meta_description,
+      focus_keyword, purchase_note, enable_reviews, featured, visibility,
+      catalog_visibility, image_alts, menu_order
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7,
+      $8, $9, $10, $11, $12, $13,
+      $14, $15, $16, $17, $18, $19,
+      $20, $21, $22, $23, $24, $25,
+      $26, $27, $28, $29, $30, $31,
+      $32, $33, $34, $35, $36, $37
+    )
+    RETURNING *
+  `
+
+  const values = [
+    name,
+    description,
+    price,
+    category,
+    stock,
+    JSON.stringify(uploadedImages),
+    created_by,
+    // Optional fields
+    slug || null,
+    sku || null,
+    barcode || null,
+    shortDescription || null,
+    salePrice || null,
+    costPrice || null,
+    productType,
+    weight || null,
+    weightUnit,
+    length || null,
+    width || null,
+    height || null,
+    lowStockThreshold,
+    stockStatus,
+    allowBackorders,
+    soldIndividually,
+    brand || null,
+    tags ? JSON.stringify(tags) : null,
+    shippingClass,
+    freeShipping,
+    metaTitle || null,
+    metaDescription || null,
+    focusKeyword || null,
+    purchaseNote || null,
+    enableReviews,
+    featured,
+    visibility,
+    catalogVisibility,
+    imageAlts ? JSON.stringify(imageAlts) : null,
+    menuOrder,
+  ]
+
+  const product = await database.query(query, values)
 
   res.status(201).json({
     success: true,
     message: 'Product created successfully.',
-    data: normalizeProduct(product.rows[0]),
+    product: normalizeProduct(product.rows[0]),
   })
 })
 
@@ -248,7 +345,6 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
 
 export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   const { productId } = req.params
-  const { name, description, price, category, stock } = req.body
 
   // Validate UUID format
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -256,10 +352,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Invalid product ID format.', 404))
   }
 
-  // For updates, at least one field must be provided
-  if (!name && !description && !price && !category && stock === undefined) {
-    return next(new ErrorHandler('Please provide at least one field to update.', 400))
-  }
+  // Get existing product
   const product = await database.query('SELECT * FROM products WHERE id = $1', [productId])
   if (product.rows.length === 0) {
     return next(new ErrorHandler('Product not found.', 404))
@@ -286,58 +379,111 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
 
     for (const file of newImages) {
       const result = await cloudinary.uploader.upload(file.tempFilePath, {
-        folder: 'products',
-        transformation: [{ width: 1000, crop: 'scale' }],
-        resource_type: 'auto',
+        folder: 'Ecommerce_Product_Images',
+        width: 1000,
+        crop: 'scale',
       })
       images.push({
-        public_id: result.public_id,
         url: result.secure_url,
+        public_id: result.public_id,
       })
     }
   }
 
   // Build dynamic UPDATE query for partial updates
+  // Support all fields from req.body
   const updateFields = []
   const updateValues = []
   let paramIndex = 1
 
-  if (name) {
-    updateFields.push(`name = $${paramIndex}`)
-    updateValues.push(name)
-    paramIndex++
+  // List of all updatable fields with their column names
+  const updateableFields = {
+    name: 'name',
+    description: 'description',
+    price: 'price',
+    category: 'category',
+    stock: 'stock',
+    slug: 'slug',
+    sku: 'sku',
+    barcode: 'barcode',
+    short_description: 'short_description',
+    shortDescription: 'short_description',
+    sale_price: 'sale_price',
+    salePrice: 'sale_price',
+    cost_price: 'cost_price',
+    costPrice: 'cost_price',
+    product_type: 'product_type',
+    productType: 'product_type',
+    weight: 'weight',
+    weight_unit: 'weight_unit',
+    weightUnit: 'weight_unit',
+    length: 'length',
+    width: 'width',
+    height: 'height',
+    low_stock_threshold: 'low_stock_threshold',
+    lowStockThreshold: 'low_stock_threshold',
+    stock_status: 'stock_status',
+    stockStatus: 'stock_status',
+    allow_backorders: 'allow_backorders',
+    allowBackorders: 'allow_backorders',
+    sold_individually: 'sold_individually',
+    soldIndividually: 'sold_individually',
+    brand: 'brand',
+    tags: 'tags',
+    shipping_class: 'shipping_class',
+    shippingClass: 'shipping_class',
+    free_shipping: 'free_shipping',
+    freeShipping: 'free_shipping',
+    meta_title: 'meta_title',
+    metaTitle: 'meta_title',
+    meta_description: 'meta_description',
+    metaDescription: 'meta_description',
+    focus_keyword: 'focus_keyword',
+    focusKeyword: 'focus_keyword',
+    purchase_note: 'purchase_note',
+    purchaseNote: 'purchase_note',
+    enable_reviews: 'enable_reviews',
+    enableReviews: 'enable_reviews',
+    featured: 'featured',
+    visibility: 'visibility',
+    catalog_visibility: 'catalog_visibility',
+    catalogVisibility: 'catalog_visibility',
+    image_alts: 'image_alts',
+    imageAlts: 'image_alts',
+    menu_order: 'menu_order',
+    menuOrder: 'menu_order',
   }
-  if (description) {
-    updateFields.push(`description = $${paramIndex}`)
-    updateValues.push(description)
-    paramIndex++
+
+  // Dynamically add fields to update
+  for (const [bodyKey, dbColumn] of Object.entries(updateableFields)) {
+    if (bodyKey in req.body && req.body[bodyKey] !== undefined) {
+      let value = req.body[bodyKey]
+
+      // Handle JSON fields
+      if (['tags', 'image_alts'].includes(dbColumn) && typeof value === 'object') {
+        value = JSON.stringify(value)
+      }
+
+      updateFields.push(`${dbColumn} = $${paramIndex}`)
+      updateValues.push(value)
+      paramIndex++
+    }
   }
-  if (price) {
-    updateFields.push(`price = $${paramIndex}`)
-    updateValues.push(price)
-    paramIndex++
-  }
-  if (category) {
-    updateFields.push(`category = $${paramIndex}`)
-    updateValues.push(category)
-    paramIndex++
-  }
-  if (stock !== undefined) {
-    updateFields.push(`stock = $${paramIndex}`)
-    updateValues.push(stock)
+
+  // Always update images if they were processed
+  if (req.files && req.files.images) {
+    updateFields.push(`images = $${paramIndex}`)
+    updateValues.push(JSON.stringify(images))
     paramIndex++
   }
 
-  // Always update images
-  updateFields.push(`images = $${paramIndex}`)
-  updateValues.push(JSON.stringify(images))
-  paramIndex++
-
+  // Check if there are any fields to update
   if (updateFields.length === 0) {
     return next(new ErrorHandler('No fields to update provided.', 400))
   }
 
-  const updateQuery = `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`
+  // Build final query
+  const updateQuery = `UPDATE products SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`
   updateValues.push(productId)
 
   const result = await database.query(updateQuery, updateValues)
@@ -345,7 +491,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   res.status(200).json({
     success: true,
     message: 'Product updated successfully.',
-    data: normalizeProduct(result.rows[0]),
+    product: normalizeProduct(result.rows[0]),
   })
 })
 
@@ -407,10 +553,16 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
         json_build_object(
             'id', r.id,
             'rating', r.rating::INT,
+            'title', r.title,
+            'content', r.content,
             'comment', r.comment,
+            'verified_purchase', r.verified_purchase,
+            'helpful_count', r.helpful_count,
             'user_id', r.user_id,
+            'reviewer_name', COALESCE(u.name, 'Anonymous'),
             'user_name', u.name,
-            'created_at', r.created_at
+            'created_at', r.created_at,
+            'updated_at', r.updated_at
         )
         ORDER BY r.created_at DESC
         ) FILTER (WHERE r.id IS NOT NULL), '[]') AS reviews

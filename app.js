@@ -39,6 +39,7 @@ import customerRouter from './router/customerRoutes.js'
 import wishlistRouter from './routes/wishlistRoutes.js'
 import cartRouter from './routes/cartRoutes.js'
 import reviewRouter from './routes/reviewRoutes.js'
+import advancedReviewRouter from './routes/advancedReviewRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -216,8 +217,13 @@ const csrfMiddleware = (req, res, next) => {
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
     // Auth routes and CSRF token endpoint DON'T need CSRF tokens
     // They use JWT authentication instead
-    if (req.path.startsWith('/auth') || req.path === '/csrf-token') {
-      console.log(`  ✅ Skipping CSRF for auth route`)
+    // Also exempt reviews endpoints since they require authentication
+    if (
+      req.path.startsWith('/auth') ||
+      req.path === '/csrf-token' ||
+      req.path.includes('/reviews')
+    ) {
+      console.log(`  ✅ Skipping CSRF for ${req.path}`)
       return next()
     }
 
@@ -310,6 +316,7 @@ app.use('/api/v1/customer', csrfMiddleware, customerRouter) // ✅ CSRF required
 app.use(wishlistRouter)
 app.use(cartRouter)
 app.use(reviewRouter)
+app.use(advancedReviewRouter)
 
 // ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
 app.use('/api/v1', apiLimiter)

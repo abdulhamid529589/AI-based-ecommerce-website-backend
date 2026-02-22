@@ -57,7 +57,12 @@ router.post('/ai-search', isAuthenticated, fetchAIFilteredProducts)
 // Enhanced product management endpoints
 router.post('/import', isAuthenticated, authorizedRoles('Admin'), bulkImportProducts)
 router.post('/:productId/duplicate', isAuthenticated, authorizedRoles('Admin'), duplicateProduct)
-router.get('/:productId/reviews', isAuthenticated, authorizedRoles('Admin'), getProductReviews)
+router.get(
+  '/:productId/admin/reviews',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  getProductReviews,
+)
 router.patch(
   '/review/:reviewId/status',
   isAuthenticated,

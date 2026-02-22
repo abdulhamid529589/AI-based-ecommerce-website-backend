@@ -40,6 +40,8 @@ import {
   // Global
   getGlobalSettings,
   updateGlobalSettings,
+  // Categories
+  getCategories,
 } from '../controllers/contentController.js'
 import { isAuthenticated, authorizedRoles } from '../middlewares/authMiddleware.js'
 
@@ -117,17 +119,26 @@ router.get('/footer', isAuthenticated, authorizedRoles('Admin'), getFooterConten
 router.post('/footer', isAuthenticated, authorizedRoles('Admin'), updateFooterContent)
 
 // ============================================
-// PROMOTIONAL BANNERS (Admin Only)
+// PROMOTIONAL BANNERS
 // ============================================
-router.get('/banners', isAuthenticated, authorizedRoles('Admin'), getBanners)
+// GET banners - Public (customers can view)
+router.get('/banners', getBanners)
+// CRUD operations - Admin only
 router.post('/banners', isAuthenticated, authorizedRoles('Admin'), createBanner)
 router.put('/banners/:bannerId', isAuthenticated, authorizedRoles('Admin'), updateBanner)
 router.delete('/banners/:bannerId', isAuthenticated, authorizedRoles('Admin'), deleteBanner)
 
 // ============================================
-// GLOBAL SETTINGS (Admin Only)
+// GLOBAL SETTINGS
 // ============================================
-router.get('/global', isAuthenticated, authorizedRoles('Admin'), getGlobalSettings)
+// GET global settings - Public (customers can view)
+router.get('/global', getGlobalSettings)
+// UPDATE global settings - Admin only
 router.post('/global', isAuthenticated, authorizedRoles('Admin'), updateGlobalSettings)
+
+// ============================================
+// CATEGORIES (Public - for frontend)
+// ============================================
+router.get('/categories', getCategories)
 
 export default router

@@ -37,11 +37,11 @@ export const getProductReviews = catchAsyncErrors(async (req, res) => {
       r.content,
       r.verified_purchase,
       r.helpful_count,
-      u.name as reviewer_name,
+      COALESCE(u.name, 'Anonymous') as reviewer_name,
       r.created_at,
       r.updated_at
     FROM reviews r
-    JOIN users u ON r.user_id = u.id
+    LEFT JOIN users u ON r.user_id = u.id
     WHERE r.product_id = $1
     ORDER BY r.created_at DESC
     LIMIT $2 OFFSET $3
@@ -80,16 +80,45 @@ export const getProductReviews = catchAsyncErrors(async (req, res) => {
  * Body: { rating, title, content }
  */
 export const createReview = catchAsyncErrors(async (req, res) => {
-  const userId = req.user.id
+  // Allow both authenticated and guest reviews
+  const userId = req.user?.id
+
+  if (!userId) {
+    console.warn(`⚠️ [REVIEW CREATE] Unauthenticated review attempt`)
+    return res.status(401).json({
+      success: false,
+      code: 'AUTHENTICATION_REQUIRED',
+      message: 'Please log in to post a review. Guest reviews are not yet supported.',
+      timestamp: new Date(),
+    })
+  }
+
   const { product_id } = req.params
-  const { rating, title, content } = req.body
+  const { rating: ratingInput, title, content } = req.body
+
+  console.log(`📝 [REVIEW CREATE] Received request:`, {
+    userId,
+    product_id,
+    bodyKeys: Object.keys(req.body),
+    body: req.body,
+    contentType: req.get('Content-Type'),
+  })
+
+  // Convert rating to number and validate
+  const rating = parseInt(ratingInput, 10)
 
   // Validate input
   if (!rating || !title || !content) {
+    console.warn(`⚠️ [REVIEW CREATE] Validation failed:`, {
+      rating: { input: ratingInput, parsed: rating, valid: !!rating },
+      title: { value: title, valid: !!title },
+      content: { value: content ? content.substring(0, 20) + '...' : null, valid: !!content },
+    })
     return res.status(400).json({
       success: false,
       code: 'MISSING_FIELDS',
       message: 'Rating, title, and content are required',
+      received: { rating: ratingInput, title, content },
       timestamp: new Date(),
     })
   }
@@ -149,7 +178,7 @@ export const createReview = catchAsyncErrors(async (req, res) => {
 
   // Check if user has purchased this product
   const purchaseCheck = await database.query(
-    `SELECT id FROM order_items oi
+    `SELECT oi.id FROM order_items oi
      JOIN orders o ON oi.order_id = o.id
      WHERE oi.product_id = $1 AND o.buyer_id = $2`,
     [product_id, userId],
@@ -159,9 +188,9 @@ export const createReview = catchAsyncErrors(async (req, res) => {
 
   // Create review
   const insertQuery = `
-    INSERT INTO reviews (product_id, user_id, rating, title, content, verified_purchase, helpful_count, created_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, 0, NOW(), NOW())
-    RETURNING id, product_id, user_id, rating, title, content, verified_purchase, helpful_count, created_at
+    INSERT INTO reviews (product_id, user_id, rating, title, content, comment, verified_purchase, helpful_count, created_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NOW(), NOW())
+    RETURNING id, product_id, user_id, rating, title, content, comment, verified_purchase, helpful_count, created_at
   `
 
   const result = await database.query(insertQuery, [
@@ -169,6 +198,7 @@ export const createReview = catchAsyncErrors(async (req, res) => {
     userId,
     rating,
     title,
+    content,
     content,
     verified_purchase,
   ])
