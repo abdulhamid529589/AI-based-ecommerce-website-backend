@@ -153,23 +153,23 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  // Prepare query with all optional fields
+  // Prepare query with all optional fields (excluding slug and catalog_visibility which don't exist in production DB)
   const query = `
     INSERT INTO products (
       name, description, price, category, stock, images, created_by,
-      slug, sku, barcode, short_description, sale_price, cost_price,
+      sku, barcode, short_description, sale_price, cost_price,
       product_type, weight, weight_unit, length, width, height,
       low_stock_threshold, stock_status, allow_backorders, sold_individually,
       brand, tags, shipping_class, free_shipping, meta_title, meta_description,
       focus_keyword, purchase_note, enable_reviews, featured, visibility,
-      catalog_visibility, image_alts, menu_order
+      image_alts, menu_order
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
-      $8, $9, $10, $11, $12, $13,
-      $14, $15, $16, $17, $18, $19,
-      $20, $21, $22, $23, $24, $25,
-      $26, $27, $28, $29, $30, $31,
-      $32, $33, $34, $35, $36, $37
+      $8, $9, $10, $11, $12,
+      $13, $14, $15, $16, $17, $18,
+      $19, $20, $21, $22, $23, $24,
+      $25, $26, $27, $28, $29, $30,
+      $31, $32, $33, $34, $35
     )
     RETURNING *
   `
@@ -182,8 +182,7 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     stock,
     JSON.stringify(uploadedImages),
     created_by,
-    // Optional fields
-    slug || null,
+    // Optional fields (removed slug - doesn't exist in production DB)
     sku || null,
     barcode || null,
     shortDescription || null,
@@ -210,7 +209,7 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     enableReviews,
     featured,
     visibility,
-    catalogVisibility,
+    // catalogVisibility, // REMOVED - column doesn't exist in production DB
     imageAlts ? JSON.stringify(imageAlts) : null,
     menuOrder,
   ]
@@ -465,7 +464,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     price: 'price',
     category: 'category',
     stock: 'stock',
-    slug: 'slug',
+    // slug: 'slug', // REMOVED - column doesn't exist in production DB
     sku: 'sku',
     barcode: 'barcode',
     short_description: 'short_description',
@@ -508,8 +507,8 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     enableReviews: 'enable_reviews',
     featured: 'featured',
     visibility: 'visibility',
-    catalog_visibility: 'catalog_visibility',
-    catalogVisibility: 'catalog_visibility',
+    // catalog_visibility: 'catalog_visibility', // REMOVED - doesn't exist in production DB
+    // catalogVisibility: 'catalog_visibility', // REMOVED - doesn't exist in production DB
     image_alts: 'image_alts',
     imageAlts: 'image_alts',
     menu_order: 'menu_order',
