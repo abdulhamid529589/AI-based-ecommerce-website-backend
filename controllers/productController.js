@@ -545,7 +545,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   }
 
   // Build final query
-  const updateQuery = `UPDATE products SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} RETURNING *`
+  const updateQuery = `UPDATE products SET ${updateFields.join(', ')} WHERE id = $${paramIndex} RETURNING *`
   updateValues.push(productId)
 
   const result = await database.query(updateQuery, updateValues)
@@ -745,7 +745,7 @@ export const postProductReview = catchAsyncErrors(async (req, res, next) => {
     if (existingReview.rows.length > 0) {
       console.log(`🔄 [POST_REVIEW] Updating existing review...`)
       review = await database.query(
-        'UPDATE reviews SET rating = $1, comment = $2, updated_at = NOW() WHERE product_id = $3 AND user_id = $4 RETURNING *',
+        'UPDATE reviews SET rating = $1, comment = $2 WHERE product_id = $3 AND user_id = $4 RETURNING *',
         [ratingNum, comment.trim(), productId, userId],
       )
     } else {
