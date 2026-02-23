@@ -128,10 +128,12 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
   // Validate required fields
   name = sanitizeXSS(name)
   description = sanitizeXSS(description)
-  category = sanitizeXSS(category)
+  if (category) {
+    category = sanitizeXSS(category)
+  }
 
-  if (!name || !description || !price || !category || stock === undefined) {
-    return next(new ErrorHandler('Please provide: name, description, price, category, stock', 400))
+  if (!name || !description || !price || stock === undefined) {
+    return next(new ErrorHandler('Please provide: name, description, price, stock', 400))
   }
 
   // Upload images to Cloudinary
@@ -169,7 +171,7 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     name,
     description,
     price,
-    category,
+    category || 'Uncategorized',
     stock,
     JSON.stringify(uploadedImages),
     created_by,
@@ -434,31 +436,12 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     price: 'price',
     category: 'category',
     stock: 'stock',
-    sale_price: 'sale_price',
-    salePrice: 'sale_price',
-    cost_price: 'cost_price',
-    costPrice: 'cost_price',
-    tags: 'tags',
-    meta_title: 'meta_title',
-    metaTitle: 'meta_title',
-    meta_description: 'meta_description',
-    metaDescription: 'meta_description',
-    featured: 'featured',
-    visibility: 'visibility',
-    image_alts: 'image_alts',
-    imageAlts: 'image_alts',
   }
 
   // Dynamically add fields to update
   for (const [bodyKey, dbColumn] of Object.entries(updateableFields)) {
     if (bodyKey in req.body && req.body[bodyKey] !== undefined) {
       let value = req.body[bodyKey]
-
-      // Handle JSON fields
-      if (['tags', 'image_alts'].includes(dbColumn) && typeof value === 'object') {
-        value = JSON.stringify(value)
-      }
-
       updateFields.push(`${dbColumn} = $${paramIndex}`)
       updateValues.push(value)
       paramIndex++

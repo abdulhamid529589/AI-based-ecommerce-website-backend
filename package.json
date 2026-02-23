@@ -6,7 +6,7 @@
   "scripts": {
     "test": "jest --detectOpenHandles --forceExit --testTimeout=10000",
     "test:watch": "jest --watch",
-    "start": "node server.js",
+    "start": "node scripts/startup.js",
     "dev": "nodemon server.js"
   },
   "keywords": [],
