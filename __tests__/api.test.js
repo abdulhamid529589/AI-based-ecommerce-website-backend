@@ -131,10 +131,10 @@ describe('Product API Endpoints', () => {
 
       expect(response.status).toBe(201)
       expect(response.body).toHaveProperty('success', true)
-      expect(response.body.data).toHaveProperty('id')
-      expect(response.body.data.name).toBe('Test Bedding Product')
+      expect(response.body.product).toHaveProperty('id')
+      expect(response.body.product.name).toBe('Test Bedding Product')
 
-      productId = response.body.data.id
+      productId = response.body.product.id
     })
 
     test('Should reject product with missing name', async () => {
@@ -220,8 +220,8 @@ describe('Product API Endpoints', () => {
 
       expect(response.status).toBe(200)
       expect(response.body.success).toBe(true)
-      expect(response.body.data.name).toBe('Updated Test Product')
-      expect(response.body.data.price).toBe(5500)
+      expect(response.body.product.name).toBe('Updated Test Product')
+      expect(response.body.product.price).toBe(5500)
     })
 
     test('Should return 404 for non-existent product', async () => {

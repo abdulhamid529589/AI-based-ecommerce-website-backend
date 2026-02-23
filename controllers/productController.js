@@ -153,11 +153,11 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  // Prepare query with all optional fields (excluding slug and catalog_visibility which don't exist in production DB)
+  // Prepare query with all optional fields (excluding slug, sku, and catalog_visibility which don't exist in production DB)
   const query = `
     INSERT INTO products (
       name, description, price, category, stock, images, created_by,
-      sku, barcode, short_description, sale_price, cost_price,
+      barcode, short_description, sale_price, cost_price,
       product_type, weight, weight_unit, length, width, height,
       low_stock_threshold, stock_status, allow_backorders, sold_individually,
       brand, tags, shipping_class, free_shipping, meta_title, meta_description,
@@ -165,11 +165,11 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
       image_alts, menu_order
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
-      $8, $9, $10, $11, $12,
-      $13, $14, $15, $16, $17, $18,
-      $19, $20, $21, $22, $23, $24,
-      $25, $26, $27, $28, $29, $30,
-      $31, $32, $33, $34, $35
+      $8, $9, $10, $11,
+      $12, $13, $14, $15, $16, $17,
+      $18, $19, $20, $21, $22, $23,
+      $24, $25, $26, $27, $28, $29,
+      $30, $31, $32, $33, $34
     )
     RETURNING *
   `
@@ -182,8 +182,7 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     stock,
     JSON.stringify(uploadedImages),
     created_by,
-    // Optional fields (removed slug - doesn't exist in production DB)
-    sku || null,
+    // Optional fields (removed slug and sku - don't exist in production DB)
     barcode || null,
     shortDescription || null,
     salePrice || null,
@@ -466,7 +465,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     stock: 'stock',
     // slug: 'slug', // REMOVED - column doesn't exist in production DB
     sku: 'sku',
-    barcode: 'barcode',
+    // sku: 'sku', // REMOVED - column doesn't exist in production DBarcode',
     short_description: 'short_description',
     shortDescription: 'short_description',
     sale_price: 'sale_price',
@@ -1008,18 +1007,17 @@ export const bulkImportProducts = catchAsyncErrors(async (req, res, next) => {
   const importedProducts = []
 
   for (const product of productsToImport) {
-    const { name, sku, category, price, stock, status, description } = product
+    const { name, category, price, stock, status, description } = product
 
     if (!name || !price || !stock) {
       continue // Skip invalid products
     }
 
     const result = await database.query(
-      `INSERT INTO products (name, sku, category, price, stock, description, status, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      `INSERT INTO products (name, category, price, stock, description, status, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [
         name,
-        sku || '',
         category || 'Uncategorized',
         price,
         stock,
@@ -1053,15 +1051,14 @@ export const duplicateProduct = catchAsyncErrors(async (req, res, next) => {
 
   const originalProduct = product.rows[0]
   const newProduct = await database.query(
-    `INSERT INTO products (name, description, price, category, stock, sku, images, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    `INSERT INTO products (name, description, price, category, stock, images, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
     [
       `${originalProduct.name} (Copy)`,
       originalProduct.description,
       originalProduct.price,
       originalProduct.category,
       originalProduct.stock,
-      `${originalProduct.sku}-copy-${Date.now()}`,
       originalProduct.images,
       created_by,
     ],
