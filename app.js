@@ -236,6 +236,13 @@ const csrfMiddleware = (req, res, next) => {
       return next()
     }
 
+    // Product admin endpoints are JWT-authenticated with Bearer token
+    // They can optionally include CSRF token but don't require it
+    if (req.path.includes('/admin/') && req.headers.authorization?.startsWith('Bearer ')) {
+      console.log(`[CSRF] ✅ Admin endpoint with JWT auth: ${req.path}`)
+      return next()
+    }
+
     console.log(`[CSRF] ⚠️ Checking CSRF token for: ${req.path}`)
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
