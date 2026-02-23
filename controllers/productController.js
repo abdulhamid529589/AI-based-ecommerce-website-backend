@@ -153,23 +153,14 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     }
   }
 
-  // Prepare query with all optional fields (excluding slug, sku, and catalog_visibility which don't exist in production DB)
+  // Prepare query with essential fields + optional fields
   const query = `
     INSERT INTO products (
       name, description, price, category, stock, images, created_by,
-      barcode, short_description, sale_price, cost_price,
-      product_type, weight, weight_unit, length, width, height,
-      low_stock_threshold, stock_status, allow_backorders, sold_individually,
-      brand, tags, shipping_class, free_shipping, meta_title, meta_description,
-      focus_keyword, purchase_note, enable_reviews, featured, visibility,
-      image_alts, menu_order
+      sale_price, cost_price, tags, meta_title, meta_description, featured, visibility, image_alts
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
-      $8, $9, $10, $11,
-      $12, $13, $14, $15, $16, $17,
-      $18, $19, $20, $21, $22, $23,
-      $24, $25, $26, $27, $28, $29,
-      $30, $31, $32, $33, $34
+      $8, $9, $10, $11, $12, $13, $14, $15
     )
     RETURNING *
   `
@@ -182,35 +173,15 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     stock,
     JSON.stringify(uploadedImages),
     created_by,
-    // Optional fields (removed slug and sku - don't exist in production DB)
-    barcode || null,
-    shortDescription || null,
+    // Optional fields
     salePrice || null,
     costPrice || null,
-    productType,
-    weight || null,
-    weightUnit,
-    length || null,
-    width || null,
-    height || null,
-    lowStockThreshold,
-    stockStatus,
-    allowBackorders,
-    soldIndividually,
-    brand || null,
     tags ? JSON.stringify(tags) : null,
-    shippingClass,
-    freeShipping,
     metaTitle || null,
     metaDescription || null,
-    focusKeyword || null,
-    purchaseNote || null,
-    enableReviews,
-    featured,
-    visibility,
-    // catalogVisibility, // REMOVED - column doesn't exist in production DB
+    featured || false,
+    visibility || 'visible',
     imageAlts ? JSON.stringify(imageAlts) : null,
-    menuOrder,
   ]
 
   const product = await database.query(query, values)
@@ -456,62 +427,26 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   const updateValues = []
   let paramIndex = 1
 
-  // List of all updatable fields with their column names
+  // List of updatable fields that exist in production DB
   const updateableFields = {
     name: 'name',
     description: 'description',
     price: 'price',
     category: 'category',
     stock: 'stock',
-    // slug: 'slug', // REMOVED - column doesn't exist in production DB
-    sku: 'sku',
-    // sku: 'sku', // REMOVED - column doesn't exist in production DBarcode',
-    short_description: 'short_description',
-    shortDescription: 'short_description',
     sale_price: 'sale_price',
     salePrice: 'sale_price',
     cost_price: 'cost_price',
     costPrice: 'cost_price',
-    product_type: 'product_type',
-    productType: 'product_type',
-    weight: 'weight',
-    weight_unit: 'weight_unit',
-    weightUnit: 'weight_unit',
-    length: 'length',
-    width: 'width',
-    height: 'height',
-    low_stock_threshold: 'low_stock_threshold',
-    lowStockThreshold: 'low_stock_threshold',
-    stock_status: 'stock_status',
-    stockStatus: 'stock_status',
-    allow_backorders: 'allow_backorders',
-    allowBackorders: 'allow_backorders',
-    sold_individually: 'sold_individually',
-    soldIndividually: 'sold_individually',
-    brand: 'brand',
     tags: 'tags',
-    shipping_class: 'shipping_class',
-    shippingClass: 'shipping_class',
-    free_shipping: 'free_shipping',
-    freeShipping: 'free_shipping',
     meta_title: 'meta_title',
     metaTitle: 'meta_title',
     meta_description: 'meta_description',
     metaDescription: 'meta_description',
-    focus_keyword: 'focus_keyword',
-    focusKeyword: 'focus_keyword',
-    purchase_note: 'purchase_note',
-    purchaseNote: 'purchase_note',
-    enable_reviews: 'enable_reviews',
-    enableReviews: 'enable_reviews',
     featured: 'featured',
     visibility: 'visibility',
-    // catalog_visibility: 'catalog_visibility', // REMOVED - doesn't exist in production DB
-    // catalogVisibility: 'catalog_visibility', // REMOVED - doesn't exist in production DB
     image_alts: 'image_alts',
     imageAlts: 'image_alts',
-    menu_order: 'menu_order',
-    menuOrder: 'menu_order',
   }
 
   // Dynamically add fields to update
