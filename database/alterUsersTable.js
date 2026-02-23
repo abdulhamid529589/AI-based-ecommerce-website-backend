@@ -5,6 +5,7 @@
 
 import database from './db.js'
 import addMobileColumnToUsers from './addMobileColumn.js'
+import { createSettingsTable } from '../models/settingsTable.js'
 
 /**
  * Add notification preference columns to users table
@@ -182,6 +183,9 @@ export const initializeDatabase = async () => {
 
     // Make email nullable to allow mobile-only registration
     await makeEmailNullable()
+
+    // Initialize settings table (for admin configurations)
+    await createSettingsTable()
 
     // Set a timeout for the initialization - don't block startup
     const initPromise = Promise.all([

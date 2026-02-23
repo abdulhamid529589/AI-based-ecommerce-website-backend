@@ -1,5 +1,13 @@
 import db from '../database/db.js'
 import { getSetting, setSetting } from '../models/settingsTable.js'
+import { v2 as cloudinary } from 'cloudinary'
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLIENT_NAME,
+  api_key: process.env.CLOUDINARY_CLIENT_API,
+  api_secret: process.env.CLOUDINARY_CLIENT_SECRET,
+})
 
 // Shop Info Endpoints
 export const getShopInfo = async (req, res) => {
@@ -319,12 +327,52 @@ export const updateCategories = async (req, res) => {
   try {
     const categories = req.body
     if (!Array.isArray(categories)) {
+      console.error('Invalid categories data - not an array:', typeof categories, categories)
       return res.status(400).json({ message: 'Categories must be an array' })
     }
-    await setSetting('categories', categories)
-    res.status(200).json({ message: 'Categories updated', categories })
+
+    // Validate and sanitize categories data
+    const validatedCategories = categories.map((cat) => ({
+      id: cat.id,
+      name: cat.name || '',
+      slug: cat.slug || '',
+      description: cat.description || '',
+      image: cat.image || '',
+      isVisible: cat.isVisible !== undefined ? cat.isVisible : true,
+      order: cat.order || 0,
+      subcategories: Array.isArray(cat.subcategories) ? cat.subcategories : [],
+    }))
+
+    console.log('Attempting to save categories:', {
+      count: validatedCategories.length,
+      firstItem: validatedCategories[0],
+    })
+
+    await setSetting('categories', validatedCategories)
+
+    // 🔌 Emit real-time update via Socket.io
+    const io = req.app.get('io')
+    if (io) {
+      io.emit('categories:updated', {
+        timestamp: new Date().toISOString(),
+        categories: validatedCategories,
+        updatedBy: req.user?.id || 'system',
+      })
+      console.log('📢 [Socket.io] Broadcasted category update to all connected clients')
+    }
+
+    res.status(200).json({ message: 'Categories updated', categories: validatedCategories })
   } catch (error) {
-    res.status(500).json({ message: 'Error updating categories', error: error.message })
+    console.error('Error updating categories:', {
+      message: error.message,
+      stack: error.stack,
+      body: req.body,
+    })
+    res.status(500).json({
+      message: 'Error updating categories',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    })
   }
 }
 
@@ -459,5 +507,128 @@ export const updateShipping = async (req, res) => {
     res.status(200).json({ message: 'Shipping settings updated' })
   } catch (error) {
     res.status(500).json({ message: 'Error updating shipping settings', error: error.message })
+  }
+}
+
+// Image Upload Endpoint (Backend authenticated Cloudinary upload)
+export const uploadImage = async (req, res) => {
+  try {
+    console.log('[uploadImage] ====== REQUEST RECEIVED ======')
+    console.log('[uploadImage] req.files type:', typeof req.files)
+    console.log('[uploadImage] req.files value:', req.files)
+    console.log('[uploadImage] req.files keys:', req.files ? Object.keys(req.files) : 'UNDEFINED')
+    console.log('[uploadImage] req.body:', req.body)
+    console.log('[uploadImage] req.headers:', {
+      contentType: req.headers['content-type'],
+      authorization: !!req.headers.authorization,
+    })
+
+    // Check if file exists
+    if (!req.files || !req.files.file) {
+      console.error('[uploadImage] ❌ NO FILE PROVIDED')
+      console.error('[uploadImage] req.files undefined?', !req.files)
+      console.error('[uploadImage] req.files.file undefined?', req.files && !req.files.file)
+      if (req.files) {
+        console.error('[uploadImage] Available fields in req.files:', Object.keys(req.files))
+      }
+      return res.status(400).json({
+        message: 'No file provided',
+        debug: {
+          hasReqFiles: !!req.files,
+          hasReqFilesFile: req.files ? !!req.files.file : false,
+          availableFields: req.files ? Object.keys(req.files) : [],
+        },
+      })
+    }
+
+    const file = req.files.file
+    console.log('[uploadImage] File received:', {
+      name: file.name,
+      mimetype: file.mimetype,
+      size: file.size,
+      hasData: !!file.data,
+      dataLength: file.data ? file.data.length : 0,
+      hasTempFilePath: !!file.tempFilePath,
+      tempFilePath: file.tempFilePath,
+    })
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+    const maxSize = 5 * 1024 * 1024 // 5MB
+
+    // Validate file is not empty
+    if (!file.tempFilePath) {
+      console.error('[uploadImage] ❌ No temp file path - file:', {
+        name: file.name,
+        size: file.size,
+        hasData: !!file.data,
+      })
+      return res.status(400).json({
+        message: 'File upload failed - no temporary file created',
+      })
+    }
+
+    if (file.size <= 0) {
+      console.error('[uploadImage] File size is 0')
+      return res.status(400).json({
+        message: 'File is empty',
+      })
+    }
+
+    // Validate file type
+    if (!allowedTypes.includes(file.mimetype)) {
+      console.error('[uploadImage] Invalid file type:', file.mimetype)
+      return res.status(400).json({
+        message: 'Invalid file type. Allowed: JPG, PNG, GIF, WebP',
+      })
+    }
+
+    // Validate file size
+    if (file.size > maxSize) {
+      console.error('[uploadImage] File too large:', file.size)
+      return res.status(400).json({
+        message: 'File size exceeds 5MB limit',
+      })
+    }
+
+    console.log('[uploadImage] ✅ All validations passed, uploading to Cloudinary...')
+    console.log('[uploadImage] Using tempFilePath:', file.tempFilePath)
+
+    // Upload to Cloudinary using tempFilePath (like productController does)
+    // This is more reliable than using buffer directly
+    const result = await cloudinary.uploader.upload(file.tempFilePath, {
+      folder: 'bedtex/categories',
+      resource_type: 'auto',
+      overwrite: false,
+      use_filename: false,
+      unique_filename: true,
+    })
+
+    console.log('[uploadImage] ✅ Cloudinary upload successful:', {
+      publicId: result.public_id,
+      url: result.secure_url,
+      size: result.bytes,
+      width: result.width,
+      height: result.height,
+    })
+
+    res.status(200).json({
+      message: 'Image uploaded successfully',
+      secure_url: result.secure_url,
+      public_id: result.public_id,
+      width: result.width,
+      height: result.height,
+    })
+  } catch (error) {
+    console.error('[uploadImage] Error uploading image:', {
+      message: error.message,
+      code: error.http_code,
+      status: error.status,
+      stack: error.stack,
+    })
+
+    res.status(500).json({
+      message: 'Error uploading image',
+      error: error.message,
+    })
   }
 }

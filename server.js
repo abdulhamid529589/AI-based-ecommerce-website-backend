@@ -1,9 +1,11 @@
+import http from 'http'
 import app from './app.js'
 import { v2 as cloudinary } from 'cloudinary'
 import initializeDatabase from './database/alterUsersTable.js'
 import { initializeSentry } from './utils/sentryIntegration.js'
 import { initializeIdempotencyCleanup } from './utils/idempotencyKey.js'
 import { createPerformanceIndexes } from './utils/performanceOptimizations.js'
+import { initializeSocket } from './socket/socketSetup.js'
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLIENT_NAME,
@@ -45,7 +47,17 @@ await createPerformanceIndexes()
 // Initialize idempotency cleanup routine
 initializeIdempotencyCleanup()
 
-app.listen(process.env.PORT, () => {
+// Create HTTP server for Socket.io support
+const httpServer = http.createServer(app)
+
+// Initialize Socket.io for real-time updates
+const io = initializeSocket(httpServer)
+
+// Make io available globally for other modules
+app.set('io', io)
+
+httpServer.listen(process.env.PORT, () => {
   console.log(`✅ Server is running on port ${process.env.PORT}`)
   console.log(`🚀 Performance optimizations enabled (compression, indexing, caching)`)
+  console.log(`🔌 Socket.io enabled for real-time updates`)
 })

@@ -19,9 +19,10 @@ async function ensureTestUserExists() {
     if (existing.rows.length === 0) {
       const hashedPassword = await bcrypt.hash('TestAdmin@123456', 10)
       await database.query(
-        'INSERT INTO users (name, email, mobile, password, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        ['Test Admin', 'test@admin.com', null, hashedPassword, 'Admin', new Date(), new Date()],
+        'INSERT INTO users (name, email, mobile, password, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)',
+        ['Test Admin', 'test@admin.com', null, hashedPassword, 'Admin', new Date()],
       )
+      console.log('✅ Test user created successfully')
     }
   } catch (error) {
     console.warn('⚠️ Error ensuring test user exists:', error.message)

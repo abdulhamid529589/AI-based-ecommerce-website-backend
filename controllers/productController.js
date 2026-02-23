@@ -4,15 +4,73 @@ import { v2 as cloudinary } from 'cloudinary'
 import database from '../database/db.js'
 import { getAIRecommendation } from '../utils/getAIRecommendation.js'
 
-// Helper function to normalize product object (convert string numbers to numbers)
+// Helper function to normalize product object (convert string numbers to numbers and parse JSON fields)
 const normalizeProduct = (product) => {
   if (!product) return product
-  return {
+
+  const normalized = {
     ...product,
+    // Parse numeric fields
     price: product.price ? parseFloat(product.price) : product.price,
     stock: product.stock ? parseInt(product.stock, 10) : product.stock,
     rating: product.rating ? parseFloat(product.rating) : product.rating,
+    sale_price: product.sale_price ? parseFloat(product.sale_price) : null,
+    cost_price: product.cost_price ? parseFloat(product.cost_price) : null,
+    weight: product.weight ? parseFloat(product.weight) : null,
+    length: product.length ? parseFloat(product.length) : null,
+    width: product.width ? parseFloat(product.width) : null,
+    height: product.height ? parseFloat(product.height) : null,
+    low_stock_threshold: product.low_stock_threshold
+      ? parseInt(product.low_stock_threshold, 10)
+      : 10,
+    menu_order: product.menu_order ? parseInt(product.menu_order, 10) : 0,
   }
+
+  // Parse JSON fields if they're stored as strings
+  if (typeof product.images === 'string') {
+    try {
+      normalized.images = JSON.parse(product.images)
+    } catch (e) {
+      normalized.images = product.images
+    }
+  }
+
+  if (typeof product.tags === 'string') {
+    try {
+      normalized.tags = JSON.parse(product.tags)
+    } catch (e) {
+      normalized.tags = product.tags
+    }
+  }
+
+  if (typeof product.image_alts === 'string') {
+    try {
+      normalized.image_alts = JSON.parse(product.image_alts)
+    } catch (e) {
+      normalized.image_alts = product.image_alts
+    }
+  }
+
+  // Convert boolean fields from string if needed
+  if (typeof product.allow_backorders === 'string') {
+    normalized.allow_backorders =
+      product.allow_backorders === 'true' || product.allow_backorders === true
+  }
+  if (typeof product.sold_individually === 'string') {
+    normalized.sold_individually =
+      product.sold_individually === 'true' || product.sold_individually === true
+  }
+  if (typeof product.free_shipping === 'string') {
+    normalized.free_shipping = product.free_shipping === 'true' || product.free_shipping === true
+  }
+  if (typeof product.enable_reviews === 'string') {
+    normalized.enable_reviews = product.enable_reviews === 'true' || product.enable_reviews === true
+  }
+  if (typeof product.featured === 'string') {
+    normalized.featured = product.featured === 'true' || product.featured === true
+  }
+
+  return normalized
 }
 
 export const createProduct = catchAsyncErrors(async (req, res, next) => {
@@ -323,13 +381,18 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
       topRated: topRatedResult.rows.length,
     })
 
+    // Normalize all products
+    const normalizedProducts = result.rows.map(normalizeProduct)
+    const normalizedNewProducts = newProductsResult.rows.map(normalizeProduct)
+    const normalizedTopRated = topRatedResult.rows.map(normalizeProduct)
+
     res.status(200).json({
       success: true,
       message: 'Products fetched successfully',
-      products: result.rows,
+      products: normalizedProducts,
       totalProducts,
-      newProducts: newProductsResult.rows,
-      topRatedProducts: topRatedResult.rows,
+      newProducts: normalizedNewProducts,
+      topRatedProducts: normalizedTopRated,
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
@@ -578,11 +641,17 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
       return next(new ErrorHandler(`Product with ID ${productId} not found`, 404))
     }
 
-    const product = result.rows[0]
+    let product = result.rows[0]
+
+    // Normalize the product (parse JSON, convert types)
+    product = normalizeProduct(product)
+
     console.log(`✅ [FETCH_SINGLE_PRODUCT] Product found:`, {
       id: product.id,
       name: product.name,
       reviews: product.review_count,
+      fields: Object.keys(product).filter((k) => product[k] !== null && product[k] !== undefined)
+        .length,
     })
 
     res.status(200).json({

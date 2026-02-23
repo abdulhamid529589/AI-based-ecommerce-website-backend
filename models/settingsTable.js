@@ -17,6 +17,32 @@ export const createSettingsTable = async () => {
     await db.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS setting_value TEXT`)
     // Ensure legacy tables have the setting_key column as well
     await db.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS setting_key VARCHAR(255)`)
+    // Ensure updated_at column exists
+    await db.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`)
+    // Increase column size for larger setting values if needed
+    try {
+      await db.query(`ALTER TABLE settings ALTER COLUMN setting_value TYPE TEXT`)
+    } catch (e) {
+      // Column might already be TEXT, ignore
+    }
+
+    // Ensure UNIQUE constraint exists on setting_key (critical for ON CONFLICT)
+    try {
+      const constraintCheck = await db.query(`
+        SELECT constraint_name FROM information_schema.table_constraints
+        WHERE table_name = 'settings' AND constraint_type = 'UNIQUE'
+      `)
+      if (constraintCheck.rows.length === 0) {
+        // No unique constraint found, add it
+        await db.query(`ALTER TABLE settings ADD CONSTRAINT settings_setting_key_unique UNIQUE (setting_key)`)
+        console.log('✅ Added UNIQUE constraint to settings.setting_key')
+      }
+    } catch (e) {
+      if (!e.message.includes('already exists')) {
+        console.warn('⚠️  Could not verify UNIQUE constraint:', e.message)
+      }
+    }
+
     console.log('✅ Settings table created/verified')
   } catch (error) {
     console.error('❌ Error creating settings table:', error)
@@ -120,6 +146,16 @@ export const getSetting = async (key) => {
 // Set setting
 export const setSetting = async (key, value) => {
   try {
+    // Stringify the value first and validate size
+    const stringValue = JSON.stringify(value)
+    const sizeInMB = Buffer.byteLength(stringValue, 'utf8') / (1024 * 1024)
+
+    if (sizeInMB > 10) {
+      throw new Error(`Setting value too large: ${sizeInMB.toFixed(2)}MB (max 10MB)`)
+    }
+
+    console.log(`[setSetting] Saving setting "${key}" (${sizeInMB.toFixed(3)}MB)`)
+
     const colRes = await db.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'settings'",
     )
@@ -127,25 +163,41 @@ export const setSetting = async (key, value) => {
     if (!cols.includes('setting_value')) {
       await db.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS setting_value TEXT`)
     }
+
     const query = `
       INSERT INTO settings (setting_key, setting_value)
       VALUES ($1, $2)
-      ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2
+      ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2, updated_at = CURRENT_TIMESTAMP
     `
-    const result = await db.query(query, [key, JSON.stringify(value)])
+    const result = await db.query(query, [key, stringValue])
+    console.log(`[setSetting] Successfully saved setting "${key}"`)
     return result
   } catch (err) {
-    console.error('setSetting failed:', err)
+    console.error('[setSetting] Primary attempt failed:', {
+      key,
+      errorMessage: err.message,
+      errorCode: err.code,
+      errorDetail: err.detail,
+    })
+
     // Try a simple upsert using a generic column name as a fallback
     try {
+      const stringValue = JSON.stringify(value)
       const fallbackQuery = `
         INSERT INTO settings (setting_key, setting_value)
         VALUES ($1, $2)
-        ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2
+        ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2, updated_at = CURRENT_TIMESTAMP
       `
-      return await db.query(fallbackQuery, [key, JSON.stringify(value)])
+      const result = await db.query(fallbackQuery, [key, stringValue])
+      console.log(`[setSetting] Fallback succeeded for "${key}"`)
+      return result
     } catch (e) {
-      console.error('setSetting fallback failed:', e)
+      console.error('[setSetting] Fallback also failed:', {
+        key,
+        errorMessage: e.message,
+        errorCode: e.code,
+        errorDetail: e.detail,
+      })
       throw e
     }
   }

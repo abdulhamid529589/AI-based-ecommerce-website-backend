@@ -214,28 +214,34 @@ app.get('/api/v1/debug/token-role', isAuthenticated, (req, res) => {
 
 // CSRF validation middleware
 const csrfMiddleware = (req, res, next) => {
-  // 🔍 DEBUG: Log CSRF middleware activity
-  console.log(`🔒 CSRF Check - Method: ${req.method}, Path: ${req.path}`)
-
   // Only validate CSRF for state-changing requests
   if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    // Auth routes and CSRF token endpoint DON'T need CSRF tokens
-    // They use JWT authentication instead
-    // Also exempt reviews endpoints since they require authentication
-    if (
-      req.path.startsWith('/auth') ||
-      req.path === '/csrf-token' ||
-      req.path.includes('/reviews')
-    ) {
-      console.log(`  ✅ Skipping CSRF for ${req.path}`)
+    console.log(`[CSRF] ${req.method} ${req.path} - Checking if exempt...`)
+
+    // File uploads are JWT-authenticated, don't need CSRF
+    if (req.path === '/upload/image' || req.path === '/upload') {
+      console.log(`[CSRF] ✅ Exempting file upload: ${req.path}`)
       return next()
     }
 
+    // Auth routes use JWT, not CSRF
+    if (req.path.startsWith('/auth') || req.path === '/csrf-token') {
+      console.log(`[CSRF] ✅ Exempting auth route: ${req.path}`)
+      return next()
+    }
+
+    // Reviews are JWT-authenticated
+    if (req.path.includes('/reviews')) {
+      console.log(`[CSRF] ✅ Exempting reviews: ${req.path}`)
+      return next()
+    }
+
+    console.log(`[CSRF] ⚠️ Checking CSRF token for: ${req.path}`)
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
 
     if (!token) {
-      console.warn('⚠️ CSRF token missing in request')
+      console.warn(`[CSRF] ❌ No token for: ${req.path}`)
       return res.status(403).json({
         success: false,
         code: 'CSRF_FAILED',
@@ -245,7 +251,7 @@ const csrfMiddleware = (req, res, next) => {
     }
 
     if (!validateCSRFToken(token)) {
-      console.warn('⚠️ CSRF validation failed - invalid or expired token')
+      console.warn(`[CSRF] ❌ Invalid token for: ${req.path}`)
       return res.status(403).json({
         success: false,
         code: 'CSRF_FAILED',
@@ -254,13 +260,27 @@ const csrfMiddleware = (req, res, next) => {
       })
     }
 
-    console.log(`  ✅ CSRF token validated`)
+    console.log(`[CSRF] ✅ Token valid for: ${req.path}`)
     next()
   } else {
     // GET, HEAD, OPTIONS, etc - no CSRF needed
-    console.log(`  ✅ Skipping CSRF for ${req.method} request`)
     next()
   }
+}
+
+// Admin-specific CSRF middleware (exempts file uploads)
+const adminCsrfMiddleware = (req, res, next) => {
+  console.log(`[adminCsrfMiddleware] Path: "${req.path}", Method: ${req.method}`)
+
+  // File upload endpoints are JWT-authenticated, not CSRF-protected
+  if (req.path === '/upload/image' || req.path === '/upload') {
+    console.log(`  ✅ Skipping CSRF for admin file upload: ${req.path}`)
+    return next()
+  }
+
+  console.log(`  → Calling standard csrfMiddleware for: ${req.path}`)
+  // For all other admin routes, use standard CSRF validation
+  return csrfMiddleware(req, res, next)
 }
 
 // 🔒 Strict rate limiting for critical operations
@@ -305,7 +325,7 @@ app.use((req, res, next) => {
 // API Routes
 app.use('/api/v1/auth', authLimiter, authRouter) // ✅ Phase 3: Auth rate limiting - NO CSRF needed (JWT protected)
 app.use('/api/v1/product', csrfMiddleware, productRouter) // ✅ CSRF required for product mutations
-app.use('/api/v1/admin', csrfMiddleware, adminRouter) // ✅ CSRF required for admin routes
+app.use('/api/v1/admin', csrfMiddleware, adminRouter) // ✅ CSRF for admin, but exempts file uploads
 app.use('/api/v1/order', csrfMiddleware, orderRouter) // ✅ CSRF required for orders
 app.use('/api/v1/payment', paymentLimiter, csrfMiddleware, paymentGatewayRouter) // ✅ Phase 3: Payment rate limiting
 app.use('/api/v1/content', csrfMiddleware, contentRouter) // ✅ CSRF required for content management

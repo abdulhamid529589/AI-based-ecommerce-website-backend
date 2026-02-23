@@ -48,6 +48,7 @@ import {
   updateThemeCustomization,
   getShipping,
   updateShipping,
+  uploadImage,
 } from '../controllers/settingsController.js'
 import {
   getPromotions,
@@ -149,6 +150,9 @@ router.post('/settings/menus', isAuthenticated, authorizedRoles('Admin'), update
 router.get('/settings/categories', isAuthenticated, authorizedRoles('Admin'), getCategories)
 router.post('/settings/categories', isAuthenticated, authorizedRoles('Admin'), updateCategories)
 
+// Image Upload (Backend authenticated)
+router.post('/upload/image', isAuthenticated, authorizedRoles('Admin'), uploadImage)
+
 // Settings - Theme Customization
 router.get('/settings/theme', isAuthenticated, authorizedRoles('Admin'), getThemeCustomization)
 router.post('/settings/theme', isAuthenticated, authorizedRoles('Admin'), updateThemeCustomization)
@@ -200,6 +204,38 @@ router.get(
   isAuthenticated,
   authorizedRoles('Admin'),
   getPromotionAnalytics,
+)
+
+// Diagnostic endpoint for debugging
+router.get(
+  '/diagnostic/settings-test',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  async (req, res) => {
+    try {
+      const testData = { test: 'value', timestamp: new Date().toISOString() }
+      const { setSetting, getSetting } = await import('../models/settingsTable.js')
+
+      // Try to set a test value
+      await setSetting('_diagnostic_test', testData)
+      const retrieved = await getSetting('_diagnostic_test')
+
+      res.status(200).json({
+        success: true,
+        message: 'Settings database is working correctly',
+        testData,
+        retrieved,
+      })
+    } catch (error) {
+      console.error('Diagnostic test failed:', error)
+      res.status(500).json({
+        success: false,
+        message: 'Settings database test failed',
+        error: error.message,
+        details: error.detail,
+      })
+    }
+  },
 )
 
 export default router
