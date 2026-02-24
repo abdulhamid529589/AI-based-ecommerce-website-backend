@@ -23,6 +23,7 @@ export const initializeSocket = (httpServer) => {
       ].filter(Boolean),
       methods: ['GET', 'POST'],
       credentials: true,
+      allowEIO3: true,
     },
     reconnection: true,
     reconnectionDelay: 1000,
