@@ -9,6 +9,7 @@ import { generateEmailTemplate } from '../utils/generateForgotPasswordEmailTempl
 import { sendEmail } from '../utils/sendEmail.js'
 import crypto from 'crypto'
 import { v2 as cloudinary } from 'cloudinary'
+import { deleteTempFile } from '../utils/fileCleanup.js'
 
 export const register = catchAsyncErrors(async (req, res, next) => {
   let { name, email, mobile, password, role } = req.body
@@ -331,6 +332,9 @@ export const updateProfile = catchAsyncErrors(async (req, res, next) => {
       public_id: newProfileImage.public_id,
       url: newProfileImage.secure_url,
     }
+
+    // Clean up temporary file after successful upload
+    await deleteTempFile(avatar.tempFilePath)
   }
 
   let user

@@ -1,6 +1,7 @@
 import db from '../database/db.js'
 import { getSetting, setSetting } from '../models/settingsTable.js'
 import { v2 as cloudinary } from 'cloudinary'
+import { deleteTempFile } from '../utils/fileCleanup.js'
 
 // Configure Cloudinary
 cloudinary.config({
@@ -610,6 +611,9 @@ export const uploadImage = async (req, res) => {
       width: result.width,
       height: result.height,
     })
+
+    // Clean up temporary file after successful upload
+    await deleteTempFile(file.tempFilePath)
 
     res.status(200).json({
       message: 'Image uploaded successfully',

@@ -337,6 +337,12 @@ app.use('/api/v1/product', csrfMiddleware, productRouter) // ✅ CSRF required f
 app.use('/api/v1/admin', csrfMiddleware, adminRouter) // ✅ CSRF for admin, but exempts file uploads
 app.use('/api/v1/order', csrfMiddleware, orderRouter) // ✅ CSRF required for orders
 app.use('/api/v1/payment', paymentLimiter, csrfMiddleware, paymentGatewayRouter) // ✅ Phase 3: Payment rate limiting
+// 🔴 ATTACH SOCKET.IO TO REQUESTS (for real-time broadcasts)
+app.use((req, res, next) => {
+  req.io = req.app.get('io')
+  next()
+})
+
 app.use('/api/v1/content', csrfMiddleware, contentRouter) // ✅ CSRF required for content management
 app.use('/api/v1/search', searchRouter)
 app.use('/api/v1/feed', feedRouter)

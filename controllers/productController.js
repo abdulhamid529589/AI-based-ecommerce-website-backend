@@ -3,6 +3,8 @@ import ErrorHandler from '../middlewares/errorMiddleware.js'
 import { v2 as cloudinary } from 'cloudinary'
 import database from '../database/db.js'
 import { getAIRecommendation } from '../utils/getAIRecommendation.js'
+import { broadcastProductUpdate } from '../socket/socketSetup.js'
+import { deleteTempFile, deleteTempFiles } from '../utils/fileCleanup.js'
 
 // Helper function to normalize product object (convert string numbers to numbers and parse JSON fields)
 const normalizeProduct = (product) => {
@@ -138,6 +140,7 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
 
   // Upload images to Cloudinary
   let uploadedImages = []
+  const tempFilePaths = [] // Track temp files for cleanup
   if (req.files && req.files.images) {
     const images = Array.isArray(req.files.images) ? req.files.images : [req.files.images]
 
@@ -152,7 +155,13 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
         url: result.secure_url,
         public_id: result.public_id,
       })
+
+      // Track temp file for cleanup after successful upload
+      tempFilePaths.push(image.tempFilePath)
     }
+
+    // Clean up all temporary files after successful Cloudinary uploads
+    await deleteTempFiles(tempFilePaths)
   }
 
   // Prepare query with essential fields + optional fields
@@ -187,11 +196,22 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
   ]
 
   const product = await database.query(query, values)
+  const createdProduct = normalizeProduct(product.rows[0])
+
+  // 🔴 Broadcast product creation to all connected clients in real-time
+  if (req.io) {
+    console.log('📢 [Socket.IO] Broadcasting PRODUCT CREATED to frontend')
+    req.io.emit('products:changed', {
+      action: 'created',
+      product: createdProduct,
+      timestamp: new Date().toISOString(),
+    })
+  }
 
   res.status(201).json({
     success: true,
     message: 'Product created successfully.',
-    product: normalizeProduct(product.rows[0]),
+    product: createdProduct,
   })
 })
 
@@ -408,6 +428,7 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
 
     // Upload new images
     const newImages = Array.isArray(req.files.images) ? req.files.images : [req.files.images]
+    const tempFilePaths = [] // Track temp files for cleanup
     images = []
 
     for (const file of newImages) {
@@ -420,7 +441,13 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
         url: result.secure_url,
         public_id: result.public_id,
       })
+
+      // Track temp file for cleanup after successful upload
+      tempFilePaths.push(file.tempFilePath)
     }
+
+    // Clean up all temporary files after successful Cloudinary uploads
+    await deleteTempFiles(tempFilePaths)
   }
 
   // Build dynamic UPDATE query for partial updates
@@ -465,11 +492,22 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   updateValues.push(productId)
 
   const result = await database.query(updateQuery, updateValues)
+  const updatedProduct = normalizeProduct(result.rows[0])
+
+  // 🔴 Broadcast product update to all connected clients in real-time
+  if (req.io) {
+    console.log('📢 [Socket.IO] Broadcasting PRODUCT UPDATED to frontend')
+    req.io.emit('products:changed', {
+      action: 'updated',
+      product: updatedProduct,
+      timestamp: new Date().toISOString(),
+    })
+  }
 
   res.status(200).json({
     success: true,
     message: 'Product updated successfully.',
-    product: normalizeProduct(result.rows[0]),
+    product: updatedProduct,
   })
 })
 
@@ -502,6 +540,16 @@ export const deleteProduct = catchAsyncErrors(async (req, res, next) => {
     for (const image of images) {
       await cloudinary.uploader.destroy(image.public_id)
     }
+  }
+
+  // 🔴 Broadcast product deletion to all connected clients in real-time
+  if (req.io) {
+    console.log('📢 [Socket.IO] Broadcasting PRODUCT DELETED to frontend')
+    req.io.emit('products:changed', {
+      action: 'deleted',
+      productId: productId,
+      timestamp: new Date().toISOString(),
+    })
   }
 
   res.status(200).json({
