@@ -172,14 +172,14 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
       weight, weight_unit, length, width, height, low_stock_threshold, stock_status,
       allow_backorders, sold_individually, brand, tags, shipping_class, free_shipping,
       meta_title, meta_description, focus_keyword, purchase_note, enable_reviews,
-      featured, visibility, catalog_visibility, image_alts, menu_order
+      featured, visibility, image_alts, menu_order
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
       $8, $9, $10, $11, $12, $13, $14,
       $15, $16, $17, $18, $19, $20, $21,
       $22, $23, $24, $25, $26, $27,
       $28, $29, $30, $31, $32,
-      $33, $34, $35, $36, $37
+      $33, $34, $35, $36
     )
     RETURNING *
   `
@@ -221,7 +221,6 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     enableReviews || true,
     featured || false,
     visibility || 'public',
-    catalogVisibility || 'visible',
     imageAlts ? JSON.stringify(imageAlts) : null,
     menuOrder || 0,
   ]
@@ -523,7 +522,6 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     enable_reviews: 'enable_reviews',
     featured: 'featured',
     visibility: 'visibility',
-    catalog_visibility: 'catalog_visibility',
     image_alts: 'image_alts',
     menu_order: 'menu_order',
   }
