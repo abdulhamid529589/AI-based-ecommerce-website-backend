@@ -16,12 +16,12 @@ cd "$(dirname "$0")" || exit 1
 declare -a PHASE_RESULTS
 declare -a PHASE_TIMES
 
-PHASES=("phase2" "phase3" "phase4" "phase5" "phase6" "phase7" "phase8" "phase9" "phase10")
+PHASES=("phase2" "phase3" "phase4" "phase5" "phase6" "phase7" "phase8" "phase9" "phase10" "phase11" "phase12" "phase13" "phase14" "phase15")
 TOTAL_PHASES=${#PHASES[@]}
 PASSED=0
 FAILED=0
 
-echo "Starting test run at: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "Starting comprehensive test run at: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 

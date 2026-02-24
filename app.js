@@ -8,6 +8,7 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
 import { createTables } from './utils/createTables.js'
+import { setupHealthCheck } from './utils/healthCheck.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
 import {
   notFoundMiddleware,
@@ -47,7 +48,8 @@ const app = express()
 
 config({ path: './.env' })
 
-// Health check endpoint (must be before CORS for preflight requests)
+// Setup health check endpoints (must be before CORS for preflight requests)
+setupHealthCheck(app)
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',

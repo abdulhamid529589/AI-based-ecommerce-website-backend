@@ -58,6 +58,14 @@ import {
   deletePromotion,
   getPromotionAnalytics,
 } from '../controllers/promotionController.js'
+import {
+  getSubcategoriesByCategory_Controller,
+  createSubcategory_Controller,
+  updateSubcategory_Controller,
+  deleteSubcategory_Controller,
+  reorderSubcategories_Controller,
+  getCategoriesWithSubcategories_Controller,
+} from '../controllers/subcategoryController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
 
 const router = express.Router()
@@ -150,6 +158,40 @@ router.post('/settings/menus', isAuthenticated, authorizedRoles('Admin'), update
 router.get('/settings/categories', isAuthenticated, authorizedRoles('Admin'), getCategories)
 router.post('/settings/categories', isAuthenticated, authorizedRoles('Admin'), updateCategories)
 
+// Subcategories management (admin)
+router.get(
+  '/settings/categories/:categoryId/subcategories',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  getSubcategoriesByCategory_Controller,
+)
+router.post(
+  '/settings/categories/:categoryId/subcategories',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  createSubcategory_Controller,
+)
+router.put(
+  '/settings/subcategories/:subcategoryId',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  updateSubcategory_Controller,
+)
+router.delete(
+  '/settings/subcategories/:subcategoryId',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  deleteSubcategory_Controller,
+)
+router.put(
+  '/settings/subcategories/:subcategoryId/reorder',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  reorderSubcategories_Controller,
+)
+
+// Get categories with subcategories (for both frontend and admin)
+router.get('/settings/categories-with-subcategories', getCategoriesWithSubcategories_Controller)
 // Image Upload (Backend authenticated)
 router.post('/upload/image', isAuthenticated, authorizedRoles('Admin'), uploadImage)
 

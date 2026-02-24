@@ -37,16 +37,38 @@ export const initializeSocket = (httpServer) => {
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] ✅ Client connected: ${socket.id}`)
 
+    // Default to frontend if not specified
+    let clientType = 'frontend'
+
     // Client identifies their type (dashboard or frontend)
-    socket.on('client-type', (clientType) => {
-      const type = clientType === 'dashboard' ? 'dashboard' : 'frontend'
-      connectedClients[type].set(socket.id, {
+    socket.on('client-type', (type) => {
+      clientType = type === 'dashboard' ? 'dashboard' : 'frontend'
+      connectedClients[clientType].set(socket.id, {
         socketId: socket.id,
         connectedAt: new Date(),
       })
 
-      socket.join(type) // Join room based on type
-      console.log(`[Socket.IO] 📍 Client ${socket.id} identified as: ${type}`)
+      socket.join(clientType) // Join room based on type
+      console.log(`[Socket.IO] 📍 Client ${socket.id} identified as: ${clientType}`)
+      console.log(
+        `[Socket.IO] 👥 Dashboard clients: ${connectedClients.dashboard.size}, Frontend clients: ${connectedClients.frontend.size}`,
+      )
+    })
+
+    // Alternative identify event (for backwards compatibility)
+    socket.on('identify', (data) => {
+      clientType =
+        data?.role === 'dashboard' || data?.type === 'dashboard' ? 'dashboard' : 'frontend'
+      connectedClients[clientType].set(socket.id, {
+        socketId: socket.id,
+        connectedAt: new Date(),
+        role: data?.role || clientType,
+      })
+
+      socket.join(clientType)
+      console.log(
+        `[Socket.IO] 📍 Client ${socket.id} identified as: ${clientType} (role: ${data?.role})`,
+      )
       console.log(
         `[Socket.IO] 👥 Dashboard clients: ${connectedClients.dashboard.size}, Frontend clients: ${connectedClients.frontend.size}`,
       )
@@ -95,6 +117,20 @@ export const broadcastCategoryChange = (io, action, category) => {
     timestamp: new Date().toISOString(),
     action: action, // 'created', 'updated', 'deleted'
     category: category,
+  })
+}
+
+/**
+ * SUBCATEGORY EVENTS
+ * Emit when subcategories are created/updated/deleted/reordered
+ */
+export const broadcastSubcategoryUpdate = (io, subcategory, action = 'updated') => {
+  console.log(`[Socket.IO] 📢 Broadcasting SUBCATEGORY ${action.toUpperCase()} to all clients`)
+  io.emit('subcategories:changed', {
+    timestamp: new Date().toISOString(),
+    action: action,
+    subcategory: subcategory,
+    event: 'subcategory-sync',
   })
 }
 
