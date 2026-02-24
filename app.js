@@ -42,6 +42,7 @@ import wishlistRouter from './routes/wishlistRoutes.js'
 import cartRouter from './routes/cartRoutes.js'
 import reviewRouter from './routes/reviewRoutes.js'
 import advancedReviewRouter from './routes/advancedReviewRoutes.js'
+import chatRouter from './routes/chatRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -350,6 +351,9 @@ app.use('/api/v1/notifications', notificationRouter)
 app.use('/api/v1/analytics', analyticsRouter)
 app.use('/api/v1/checkout', csrfMiddleware, checkoutRouter) // ✅ CSRF required for checkout
 app.use('/api/v1/customer', csrfMiddleware, customerRouter) // ✅ CSRF required for customer operations
+
+// 💬 LIVE CHAT SYSTEM - Real-time customer-to-owner messaging (requires authentication)
+app.use('/api/v1/chat', isAuthenticated, chatRouter)
 
 // ✅ Phase 4: Advanced Features - Wishlist, Cart, Reviews
 app.use(wishlistRouter)

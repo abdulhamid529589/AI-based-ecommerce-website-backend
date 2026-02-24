@@ -1,4 +1,5 @@
 import { Server } from 'socket.io'
+import { saveMessage, markUserOnline, markUserOffline } from '../models/chatMessage.js'
 
 /**
  * Initialize Socket.io for real-time updates
@@ -8,6 +9,7 @@ import { Server } from 'socket.io'
  * - Order notifications
  * - User activity tracking
  * - Dashboard analytics
+ * - LIVE CHAT: Customer-to-owner real-time messaging
  */
 export const initializeSocket = (httpServer) => {
   const io = new Server(httpServer, {
@@ -34,11 +36,16 @@ export const initializeSocket = (httpServer) => {
     frontend: new Map(),
   }
 
+  // Track user chat sessions for real-time messaging
+  const userChatSessions = new Map()
+
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] ✅ Client connected: ${socket.id}`)
 
     // Default to frontend if not specified
     let clientType = 'frontend'
+    let userId = null
+    let userEmail = null
 
     // Client identifies their type (dashboard or frontend)
     socket.on('client-type', (type) => {
@@ -74,9 +81,231 @@ export const initializeSocket = (httpServer) => {
       )
     })
 
+    // ==================== CHAT EVENTS ====================
+    /**
+     * User joins chat (after authentication)
+     * Payload: { userId, userEmail, userName }
+     */
+    socket.on('chat:user-joined', async (data) => {
+      const { userId, userEmail, userName } = data
+
+      if (!userId) {
+        socket.emit('chat:error', { message: 'User ID required' })
+        return
+      }
+
+      // Store user's chat session
+      userChatSessions.set(userId, {
+        socketId: socket.id,
+        userName: userName,
+        email: userEmail,
+        joinedAt: new Date(),
+        isOnline: true,
+      })
+
+      // Join user to their personal chat room
+      socket.join(`chat:user:${userId}`)
+      socket.join('chat:all-users') // For admin to track
+
+      // Mark user as online in database
+      try {
+        await markUserOnline(userId, userEmail)
+      } catch (error) {
+        console.error(`[Socket.IO] Error marking user online:`, error)
+      }
+
+      // Notify admin dashboard about user coming online
+      io.to('dashboard').emit('chat:user-online', {
+        userId: userId,
+        userName: userName,
+        userEmail: userEmail,
+        timestamp: new Date().toISOString(),
+      })
+
+      console.log(
+        `[Socket.IO] 💬 User ${userId} (${userEmail}) joined chat. Active chat sessions: ${userChatSessions.size}`,
+      )
+
+      // Acknowledge to user
+      socket.emit('chat:joined-success', {
+        userId: userId,
+        message: 'Connected to chat',
+        timestamp: new Date().toISOString(),
+      })
+    })
+
+    /**
+     * User sends a message
+     * Payload: { userId, message, messageType, attachmentUrl }
+     */
+    socket.on('chat:send-message', async (data) => {
+      try {
+        const { userId, message, messageType = 'text', attachmentUrl } = data
+
+        if (!userId || !message) {
+          socket.emit('chat:error', { message: 'User ID and message content required' })
+          return
+        }
+
+        // Save message to database
+        const savedMessage = await saveMessage({
+          user_id: userId,
+          message: message,
+          message_type: messageType,
+          attachment_url: attachmentUrl || null,
+        })
+
+        // Get user info from session
+        const userSession = userChatSessions.get(userId)
+        const userName = userSession?.userName || 'User'
+
+        // Emit to admin dashboard
+        io.to('dashboard').emit('chat:new-message', {
+          messageId: savedMessage.id,
+          userId: userId,
+          userName: userName,
+          userEmail: userSession?.email,
+          message: message,
+          messageType: messageType,
+          attachmentUrl: attachmentUrl,
+          timestamp: savedMessage.sent_at,
+        })
+
+        // Acknowledge to sender
+        socket.emit('chat:message-sent', {
+          messageId: savedMessage.id,
+          timestamp: savedMessage.sent_at,
+        })
+
+        console.log(`[Socket.IO] 💬 Message from user ${userId}: ${message.substring(0, 50)}...`)
+      } catch (error) {
+        console.error(`[Socket.IO] Error saving message:`, error)
+        socket.emit('chat:error', { message: 'Failed to send message' })
+      }
+    })
+
+    /**
+     * Admin sends reply to customer
+     * Payload: { userId, message, messageType, attachmentUrl }
+     */
+    socket.on('chat:admin-reply', async (data) => {
+      try {
+        const { userId, message, messageType = 'text', attachmentUrl, adminId, adminName } = data
+
+        if (!userId || !message || !adminId) {
+          socket.emit('chat:error', { message: 'User ID, message, and admin ID required' })
+          return
+        }
+
+        // Save admin message to database
+        const savedMessage = await saveMessage({
+          user_id: userId,
+          message: message,
+          message_type: messageType,
+          attachment_url: attachmentUrl || null,
+          is_admin_message: true, // Flag to identify admin messages
+        })
+
+        // Send message to customer's room
+        io.to(`chat:user:${userId}`).emit('chat:new-message-from-admin', {
+          messageId: savedMessage.id,
+          message: message,
+          messageType: messageType,
+          attachmentUrl: attachmentUrl,
+          adminName: adminName,
+          timestamp: savedMessage.sent_at,
+        })
+
+        // Acknowledge to admin
+        socket.emit('chat:reply-sent', {
+          messageId: savedMessage.id,
+          userId: userId,
+          timestamp: savedMessage.sent_at,
+        })
+
+        console.log(`[Socket.IO] 📨 Admin reply to user ${userId}: ${message.substring(0, 50)}...`)
+      } catch (error) {
+        console.error(`[Socket.IO] Error saving admin reply:`, error)
+        socket.emit('chat:error', { message: 'Failed to send reply' })
+      }
+    })
+
+    /**
+     * User marks messages as read
+     * Payload: { userId }
+     */
+    socket.on('chat:mark-as-read', async (data) => {
+      try {
+        const { userId } = data
+
+        if (!userId) {
+          socket.emit('chat:error', { message: 'User ID required' })
+          return
+        }
+
+        // Mark all messages for this user as read
+        const result = await markMessagesAsRead(userId)
+
+        socket.emit('chat:messages-marked-read', {
+          userId: userId,
+          timestamp: new Date().toISOString(),
+        })
+
+        // Notify admin that messages are read
+        io.to('dashboard').emit('chat:messages-read', {
+          userId: userId,
+          timestamp: new Date().toISOString(),
+        })
+
+        console.log(`[Socket.IO] ✓ Messages marked as read for user ${userId}`)
+      } catch (error) {
+        console.error(`[Socket.IO] Error marking messages as read:`, error)
+        socket.emit('chat:error', { message: 'Failed to mark messages as read' })
+      }
+    })
+
+    /**
+     * User is typing indicator
+     * Payload: { userId, isTyping }
+     */
+    socket.on('chat:user-typing', (data) => {
+      const { userId, isTyping } = data
+
+      // Notify admin of typing indicator
+      io.to('dashboard').emit('chat:user-typing', {
+        userId: userId,
+        isTyping: isTyping,
+        timestamp: new Date().toISOString(),
+      })
+    })
+
+    // ==================== END CHAT EVENTS ====================
+
     // When client disconnects
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log(`[Socket.IO] ❌ Client disconnected: ${socket.id}`)
+
+      // Handle user disconnect from chat
+      if (userId && userChatSessions.has(userId)) {
+        userChatSessions.delete(userId)
+
+        try {
+          await markUserOffline(userId)
+        } catch (error) {
+          console.error(`[Socket.IO] Error marking user offline:`, error)
+        }
+
+        // Notify admin dashboard
+        io.to('dashboard').emit('chat:user-offline', {
+          userId: userId,
+          timestamp: new Date().toISOString(),
+        })
+
+        console.log(
+          `[Socket.IO] User ${userId} marked offline. Active sessions: ${userChatSessions.size}`,
+        )
+      }
+
       connectedClients.dashboard.delete(socket.id)
       connectedClients.frontend.delete(socket.id)
       const totalClients = connectedClients.dashboard.size + connectedClients.frontend.size
@@ -94,6 +323,9 @@ export const initializeSocket = (httpServer) => {
       timestamp: new Date().toISOString(),
     })
   })
+
+  // Store io instance on the socket server for use in routes
+  io.userChatSessions = userChatSessions
 
   return io
 }

@@ -13,6 +13,7 @@ import {
 import createAuditLogsTable from '../models/auditLogsTable.js'
 import createPromotionsTable from '../models/promotionsTable.js'
 import createNotificationsTable from '../models/notificationsTable.js'
+import { createChatMessageTable } from '../models/chatMessage.js'
 import {
   createPagesTable,
   createHomepageSectionsTable,
@@ -42,10 +43,12 @@ export const createTables = async () => {
     await createAuditLogsTable()
     // 💬 Notifications System
     await createNotificationsTable()
-    // � Promotions & Discounts
+    // 💬 Promotions & Discounts
     await createPromotionsTable()
+    // 💬 LIVE CHAT SYSTEM - Customer to Owner Real-time Messaging
+    await createChatMessageTable()
 
-    // �🎨 Content Management Tables
+    // 🎨 Content Management Tables
     await createPagesTable()
     await createHomepageSectionsTable()
     await createMenuItemsTable()

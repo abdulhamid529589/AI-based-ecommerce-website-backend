@@ -164,19 +164,28 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     await deleteTempFiles(tempFilePaths)
   }
 
-  // Prepare query with essential fields + optional fields
+  // Prepare query with essential fields + ALL optional fields
   const query = `
     INSERT INTO products (
       name, description, price, category, stock, images, created_by,
-      sale_price, cost_price, tags, meta_title, meta_description, featured, visibility, image_alts
+      slug, sku, barcode, short_description, sale_price, cost_price, product_type,
+      weight, weight_unit, length, width, height, low_stock_threshold, stock_status,
+      allow_backorders, sold_individually, brand, tags, shipping_class, free_shipping,
+      meta_title, meta_description, focus_keyword, purchase_note, enable_reviews,
+      featured, visibility, catalog_visibility, image_alts, menu_order
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
-      $8, $9, $10, $11, $12, $13, $14, $15
+      $8, $9, $10, $11, $12, $13, $14,
+      $15, $16, $17, $18, $19, $20, $21,
+      $22, $23, $24, $25, $26, $27,
+      $28, $29, $30, $31, $32,
+      $33, $34, $35, $36, $37
     )
     RETURNING *
   `
 
   const values = [
+    // Required fields
     name,
     description,
     price,
@@ -185,14 +194,36 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     JSON.stringify(uploadedImages),
     created_by,
     // Optional fields
+    slug || null,
+    sku || null,
+    barcode || null,
+    shortDescription || null,
     salePrice || null,
     costPrice || null,
+    productType || 'simple',
+    weight || null,
+    weightUnit || 'kg',
+    length || null,
+    width || null,
+    height || null,
+    lowStockThreshold || 10,
+    stockStatus || 'in-stock',
+    allowBackorders || false,
+    soldIndividually || false,
+    brand || null,
     tags ? JSON.stringify(tags) : null,
+    shippingClass || 'standard',
+    freeShipping || false,
     metaTitle || null,
     metaDescription || null,
+    focusKeyword || null,
+    purchaseNote || null,
+    enableReviews || true,
     featured || false,
-    visibility || 'visible',
+    visibility || 'public',
+    catalogVisibility || 'visible',
     imageAlts ? JSON.stringify(imageAlts) : null,
+    menuOrder || 0,
   ]
 
   const product = await database.query(query, values)
@@ -456,19 +487,94 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
   const updateValues = []
   let paramIndex = 1
 
-  // List of updatable fields that exist in production DB
+  // List of updatable fields - maps form field names (snake_case from FormData) to DB columns
   const updateableFields = {
+    // Required fields
     name: 'name',
     description: 'description',
     price: 'price',
     category: 'category',
     stock: 'stock',
+    // Optional fields (snake_case from form submission)
+    slug: 'slug',
+    sku: 'sku',
+    barcode: 'barcode',
+    short_description: 'short_description',
+    sale_price: 'sale_price',
+    cost_price: 'cost_price',
+    product_type: 'product_type',
+    weight: 'weight',
+    weight_unit: 'weight_unit',
+    length: 'length',
+    width: 'width',
+    height: 'height',
+    low_stock_threshold: 'low_stock_threshold',
+    stock_status: 'stock_status',
+    allow_backorders: 'allow_backorders',
+    sold_individually: 'sold_individually',
+    brand: 'brand',
+    tags: 'tags',
+    shipping_class: 'shipping_class',
+    free_shipping: 'free_shipping',
+    meta_title: 'meta_title',
+    meta_description: 'meta_description',
+    focus_keyword: 'focus_keyword',
+    purchase_note: 'purchase_note',
+    enable_reviews: 'enable_reviews',
+    featured: 'featured',
+    visibility: 'visibility',
+    catalog_visibility: 'catalog_visibility',
+    image_alts: 'image_alts',
+    menu_order: 'menu_order',
   }
 
   // Dynamically add fields to update
   for (const [bodyKey, dbColumn] of Object.entries(updateableFields)) {
     if (bodyKey in req.body && req.body[bodyKey] !== undefined) {
       let value = req.body[bodyKey]
+
+      // Special handling for JSON fields
+      if (dbColumn === 'tags' || dbColumn === 'image_alts') {
+        if (Array.isArray(value)) {
+          value = JSON.stringify(value)
+        }
+      }
+
+      // Special handling for boolean fields
+      if (
+        dbColumn === 'allow_backorders' ||
+        dbColumn === 'sold_individually' ||
+        dbColumn === 'free_shipping' ||
+        dbColumn === 'enable_reviews' ||
+        dbColumn === 'featured'
+      ) {
+        if (typeof value === 'string') {
+          value = value === 'true' || value === true
+        }
+      }
+
+      // Special handling for numeric fields
+      if (
+        [
+          'price',
+          'sale_price',
+          'cost_price',
+          'weight',
+          'length',
+          'width',
+          'height',
+          'low_stock_threshold',
+          'menu_order',
+        ].includes(dbColumn)
+      ) {
+        if (value !== null && value !== undefined && value !== '') {
+          value =
+            dbColumn === 'low_stock_threshold' || dbColumn === 'menu_order'
+              ? parseInt(value, 10)
+              : parseFloat(value)
+        }
+      }
+
       updateFields.push(`${dbColumn} = $${paramIndex}`)
       updateValues.push(value)
       paramIndex++
