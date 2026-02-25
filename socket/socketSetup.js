@@ -1,5 +1,8 @@
 import { Server } from 'socket.io'
 import { saveMessage, markUserOnline, markUserOffline } from '../models/chatMessage.js'
+import { createLogger } from '../utils/logger.js'
+
+const logger = createLogger('Socket.IO')
 
 /**
  * Initialize Socket.io for real-time updates
@@ -12,15 +15,21 @@ import { saveMessage, markUserOnline, markUserOffline } from '../models/chatMess
  * - LIVE CHAT: Customer-to-owner real-time messaging
  */
 export const initializeSocket = (httpServer) => {
+  logger.info('🚀 Initializing Socket.io server')
+
+  const allowedOrigins = [
+    'http://localhost:5173', // Dashboard
+    'http://localhost:5174', // Frontend shop
+    'http://localhost:3000', // Alternative frontend port
+    process.env.FRONTEND_URL || '',
+    process.env.DASHBOARD_URL || '',
+  ].filter(Boolean)
+
+  logger.debug('📋 Allowed CORS origins:', { origins: allowedOrigins })
+
   const io = new Server(httpServer, {
     cors: {
-      origin: [
-        'http://localhost:5173', // Dashboard
-        'http://localhost:5174', // Frontend shop
-        'http://localhost:3000', // Alternative frontend port
-        process.env.FRONTEND_URL || '',
-        process.env.DASHBOARD_URL || '',
-      ].filter(Boolean),
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
       allowEIO3: true,
@@ -29,6 +38,9 @@ export const initializeSocket = (httpServer) => {
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 5,
+    maxHttpBufferSize: 1e6, // 1MB max message size
+    pingInterval: 25000,
+    pingTimeout: 60000,
   })
 
   // Track connected clients by type
@@ -40,125 +52,183 @@ export const initializeSocket = (httpServer) => {
   // Track user chat sessions for real-time messaging
   const userChatSessions = new Map()
 
+  /**
+   * Connection handler with comprehensive error handling
+   */
   io.on('connection', (socket) => {
-    console.log(`[Socket.IO] ✅ Client connected: ${socket.id}`)
+    try {
+      logger.socketConnect(socket.id, 'unknown', socket.handshake.address)
 
-    // Default to frontend if not specified
-    let clientType = 'frontend'
-    let userId = null
-    let userEmail = null
+      // Default to frontend if not specified
+      let clientType = 'frontend'
+      let userId = null
+      let userEmail = null
 
-    // Client identifies their type (dashboard or frontend)
-    socket.on('client-type', (type) => {
-      clientType = type === 'dashboard' ? 'dashboard' : 'frontend'
-      connectedClients[clientType].set(socket.id, {
-        socketId: socket.id,
-        connectedAt: new Date(),
-      })
+      /**
+       * Client identifies their type (dashboard or frontend)
+       */
+      socket.on('client-type', (type) => {
+        try {
+          clientType = type === 'dashboard' ? 'dashboard' : 'frontend'
+          connectedClients[clientType].set(socket.id, {
+            socketId: socket.id,
+            connectedAt: new Date(),
+            userId: userId,
+          })
 
-      socket.join(clientType) // Join room based on type
-      console.log(`[Socket.IO] 📍 Client ${socket.id} identified as: ${clientType}`)
-      console.log(
-        `[Socket.IO] 👥 Dashboard clients: ${connectedClients.dashboard.size}, Frontend clients: ${connectedClients.frontend.size}`,
-      )
-    })
-
-    // Alternative identify event (for backwards compatibility)
-    socket.on('identify', (data) => {
-      clientType =
-        data?.role === 'dashboard' || data?.type === 'dashboard' ? 'dashboard' : 'frontend'
-      connectedClients[clientType].set(socket.id, {
-        socketId: socket.id,
-        connectedAt: new Date(),
-        role: data?.role || clientType,
-      })
-
-      socket.join(clientType)
-      console.log(
-        `[Socket.IO] 📍 Client ${socket.id} identified as: ${clientType} (role: ${data?.role})`,
-      )
-      console.log(
-        `[Socket.IO] 👥 Dashboard clients: ${connectedClients.dashboard.size}, Frontend clients: ${connectedClients.frontend.size}`,
-      )
-    })
-
-    // ==================== CHAT EVENTS ====================
-    /**
-     * User joins chat (after authentication)
-     * Payload: { userId, userEmail, userName }
-     */
-    socket.on('chat:user-joined', async (data) => {
-      const { userId, userEmail, userName } = data
-
-      if (!userId) {
-        socket.emit('chat:error', { message: 'User ID required' })
-        return
-      }
-
-      // Store user's chat session
-      userChatSessions.set(userId, {
-        socketId: socket.id,
-        userName: userName,
-        email: userEmail,
-        joinedAt: new Date(),
-        isOnline: true,
-      })
-
-      // Join user to their personal chat room
-      socket.join(`chat:user:${userId}`)
-      socket.join('chat:all-users') // For admin to track
-
-      // Mark user as online in database
-      try {
-        await markUserOnline(userId, userEmail)
-      } catch (error) {
-        console.error(`[Socket.IO] Error marking user online:`, error)
-      }
-
-      // Notify admin dashboard about user coming online
-      io.to('dashboard').emit('chat:user-online', {
-        userId: userId,
-        userName: userName,
-        userEmail: userEmail,
-        timestamp: new Date().toISOString(),
-      })
-
-      console.log(
-        `[Socket.IO] 💬 User ${userId} (${userEmail}) joined chat. Active chat sessions: ${userChatSessions.size}`,
-      )
-
-      // Acknowledge to user
-      socket.emit('chat:joined-success', {
-        userId: userId,
-        message: 'Connected to chat',
-        timestamp: new Date().toISOString(),
-      })
-    })
-
-    /**
-     * User sends a message
-     * Payload: { userId, message, messageType, attachmentUrl }
-     */
-    socket.on('chat:send-message', async (data) => {
-      try {
-        const { userId, message, messageType = 'text', attachmentUrl } = data
-
-        if (!userId || !message) {
-          socket.emit('chat:error', { message: 'User ID and message content required' })
-          return
+          socket.join(clientType)
+          logger.info(`📍 Client identified`, {
+            socketId: socket.id,
+            clientType,
+            totalDashboard: connectedClients.dashboard.size,
+            totalFrontend: connectedClients.frontend.size,
+          })
+        } catch (error) {
+          logger.socketError(socket.id, 'client-type', error)
+          socket.emit('error', { message: 'Failed to identify client type' })
         }
+      })
 
-        // Save message to database
-        const savedMessage = await saveMessage({
-          user_id: userId,
-          message: message,
-          message_type: messageType,
-          attachment_url: attachmentUrl || null,
-        })
+      /**
+       * Alternative identify event (for backwards compatibility)
+       */
+      socket.on('identify', (data) => {
+        try {
+          clientType =
+            data?.role === 'dashboard' || data?.type === 'dashboard'
+              ? 'dashboard'
+              : 'frontend'
+          connectedClients[clientType].set(socket.id, {
+            socketId: socket.id,
+            connectedAt: new Date(),
+            role: data?.role || clientType,
+            userId: data?.userId,
+          })
 
-        // Get user info from session
-        const userSession = userChatSessions.get(userId)
-        const userName = userSession?.userName || 'User'
+          socket.join(clientType)
+          logger.debug(`📍 Client identified with role`, {
+            socketId: socket.id,
+            clientType,
+            role: data?.role,
+          })
+        } catch (error) {
+          logger.socketError(socket.id, 'identify', error)
+        }
+      })
+
+      /**
+       * ==================== CHAT EVENTS ====================
+       * User joins chat (after authentication)
+       * Payload: { userId, userEmail, userName }
+       */
+      socket.on('chat:user-joined', async (data) => {
+        try {
+          const { userId, userEmail, userName } = data
+
+          if (!userId) {
+            logger.warn('❌ User joined without userId')
+            socket.emit('chat:error', { message: 'User ID required' })
+            return
+          }
+
+          // Store user's chat session
+          userChatSessions.set(userId, {
+            socketId: socket.id,
+            userName: userName,
+            email: userEmail,
+            joinedAt: new Date(),
+            isOnline: true,
+          })
+
+          // Join user to their personal chat room
+          socket.join(`chat:user:${userId}`)
+          socket.join('chat:all-users') // For admin to track
+
+          // Mark user as online in database
+          try {
+            await markUserOnline(userId, userEmail)
+            logger.info('📍 User marked online in database', {
+              userId,
+              userEmail,
+            })
+          } catch (dbError) {
+            logger.warn('⚠️ Failed to mark user online in database', dbError, {
+              userId,
+            })
+            // Don't fail the entire operation if database fails
+          }
+
+          // Notify admin dashboard about user coming online
+          io.to('dashboard').emit('chat:user-online', {
+            userId: userId,
+            userName: userName,
+            userEmail: userEmail,
+            timestamp: new Date().toISOString(),
+          })
+
+          logger.info('💬 User joined chat', {
+            userId,
+            userEmail,
+            totalSessions: userChatSessions.size,
+          })
+
+          // Acknowledge to user
+          socket.emit('chat:joined-success', {
+            userId: userId,
+            message: 'Connected to chat',
+            timestamp: new Date().toISOString(),
+          })
+        } catch (error) {
+          logger.socketError(socket.id, 'chat:user-joined', error)
+          socket.emit('chat:error', { message: 'Failed to join chat' })
+        }
+      })
+
+      /**
+       * User sends a message
+       * Payload: { userId, message, messageType, attachmentUrl }
+       */
+      socket.on('chat:send-message', async (data) => {
+        const startTime = Date.now()
+        try {
+          const { userId, message, messageType = 'text', attachmentUrl } = data
+
+          if (!userId || !message) {
+            logger.warn('❌ Message missing required fields', {
+              userId,
+              hasMessage: !!message,
+            })
+            socket.emit('chat:error', { message: 'User ID and message content required' })
+            return
+          }
+
+          // Validate message length
+          if (message.length > 10000) {
+            socket.emit('chat:error', { message: 'Message too long (max 10000 characters)' })
+            return
+          }
+
+          // Save message to database
+          const savedMessage = await saveMessage({
+            user_id: userId,
+            message: message,
+            message_type: messageType,
+            attachment_url: attachmentUrl || null,
+          })
+
+          if (!savedMessage) {
+            throw new Error('Failed to save message to database')
+          }
+
+          // Get user info from session
+          const userSession = userChatSessions.get(userId)
+          const userName = userSession?.userName || 'User'
+
+          logger.debug('💬 Message saved to database', {
+            messageId: savedMessage.id,
+            userId,
+            duration: Date.now() - startTime,
+          })
 
         // Emit to admin dashboard
         io.to('dashboard').emit('chat:new-message', {
@@ -280,14 +350,81 @@ export const initializeSocket = (httpServer) => {
       })
     })
 
-    // ==================== END CHAT EVENTS ====================
+      // ==================== END CHAT EVENTS ====================
 
-    // When client disconnects
-    socket.on('disconnect', async () => {
-      console.log(`[Socket.IO] ❌ Client disconnected: ${socket.id}`)
+      /**
+       * Disconnect handler with cleanup
+       */
+      socket.on('disconnect', async (reason) => {
+        try {
+          logger.socketDisconnect(socket.id, reason, clientType)
 
-      // Handle user disconnect from chat
-      if (userId && userChatSessions.has(userId)) {
+          // Clean up client connection tracking
+          connectedClients[clientType].delete(socket.id)
+
+          // Handle user disconnect from chat
+          if (userId && userChatSessions.has(userId)) {
+            try {
+              await markUserOffline(userId)
+              logger.info('👋 User marked offline', { userId })
+            } catch (dbError) {
+              logger.warn('⚠️ Failed to mark user offline in database', dbError, {
+                userId,
+              })
+            }
+
+            // Notify admin dashboard
+            io.to('dashboard').emit('chat:user-offline', {
+              userId: userId,
+              timestamp: new Date().toISOString(),
+            })
+
+            userChatSessions.delete(userId)
+            logger.info('💬 User chat session ended', {
+              userId,
+              reason,
+              remainingSessions: userChatSessions.size,
+            })
+          }
+
+          logger.debug('📊 Connection status', {
+            dashboardClients: connectedClients.dashboard.size,
+            frontendClients: connectedClients.frontend.size,
+          })
+        } catch (error) {
+          logger.error('❌ Error during disconnect cleanup', error, {
+            socketId: socket.id,
+            reason,
+          })
+        }
+      })
+
+      /**
+       * Socket error handler
+       */
+      socket.on('error', (error) => {
+        logger.socketError(socket.id, 'socket-error', error, {
+          clientType,
+          userId,
+        })
+      })
+    } catch (connectionError) {
+      logger.error('❌ Fatal error in connection handler', connectionError, {
+        socketId: socket.id,
+      })
+      socket.disconnect()
+    }
+  })
+
+  /**
+   * Server-level error handling
+   */
+  io.engine.on('connection_error', (err) => {
+    logger.error('❌ Engine connection error', err, {
+      errorCode: err.code,
+      errorContext: err.context,
+    })
+  })
         userChatSessions.delete(userId)
 
         try {
