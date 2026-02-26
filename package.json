@@ -9,6 +9,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "migrate": "node scripts/run-migration.js",
+    "production:migrate": "node scripts/production-migrate.js",
     "db:migrate": "node scripts/database-migration.js",
     "db:test": "node scripts/database-migration.js --test",
     "prepare:deploy": "bash scripts/prepare-render-deployment.sh",

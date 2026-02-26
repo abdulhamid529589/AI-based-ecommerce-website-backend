@@ -42,6 +42,7 @@ import wishlistRouter from './routes/wishlistRoutes.js'
 import cartRouter from './routes/cartRoutes.js'
 import reviewRouter from './routes/reviewRoutes.js'
 import advancedReviewRouter from './routes/advancedReviewRoutes.js'
+import chatRouter from './routes/chatRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -356,6 +357,9 @@ app.use(wishlistRouter)
 app.use(cartRouter)
 app.use(reviewRouter)
 app.use(advancedReviewRouter)
+
+// ✅ Phase 5: Live Chat - Real-time messaging
+app.use('/api/v1/chat', csrfMiddleware, chatRouter)
 
 // ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
 app.use('/api/v1', apiLimiter)

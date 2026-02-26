@@ -7,7 +7,7 @@ import database from './db.js'
 import addMobileColumnToUsers from './addMobileColumn.js'
 import { createSettingsTable } from '../models/settingsTable.js'
 import { createSubcategoriesTable } from '../models/subcategoriesTable.js'
-
+import { createChatTables } from './chat.js'
 /**
  * Add notification preference columns to users table
  */
@@ -195,6 +195,7 @@ export const initializeDatabase = async () => {
       initializeWishlistTable(),
       initializeCartTable(),
       createSubcategoriesTable(),
+      createChatTables(),
     ])
 
     const timeoutPromise = new Promise((_, reject) =>

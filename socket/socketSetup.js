@@ -1,5 +1,6 @@
 import { Server } from 'socket.io'
 import { createLogger } from '../utils/logger.js'
+import { initializeChatSocket } from './chatSocket.js'
 
 const logger = createLogger('Socket.IO')
 
@@ -11,6 +12,7 @@ const logger = createLogger('Socket.IO')
  * - Order notifications
  * - User activity tracking
  * - Dashboard analytics
+ * - Live chat messaging
  */
 export const initializeSocket = (httpServer) => {
   logger.info('🚀 Initializing Socket.io server')
@@ -170,6 +172,9 @@ export const initializeSocket = (httpServer) => {
     })
   })
 
+  // Initialize all chat and messaging features
+  initializeChatSocket(io)
+
   return io
 }
 
@@ -318,6 +323,14 @@ export const sendNotification = (io, clientType, message) => {
     timestamp: new Date().toISOString(),
     message: message,
   })
+}
+
+/**
+ * Initialize all socket namespaces
+ */
+function initializeNamespaces(io) {
+  // Initialize chat socket
+  initializeChatSocket(io)
 }
 
 export default {
