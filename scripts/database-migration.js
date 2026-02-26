@@ -304,6 +304,114 @@ async function addColumnIfNotExists(columnName, columnDefinition) {
 }
 
 /**
+ * Fix and ensure subcategories table exists with proper schema
+ */
+async function ensureSubcategoriesTable() {
+  try {
+    console.log('\n🔧 [MIGRATION] Ensuring subcategories table...')
+
+    // Check if subcategories table exists
+    const tableExists = await database.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'subcategories'
+      )
+    `)
+
+    if (!tableExists.rows[0].exists) {
+      // Create the table if it doesn't exist
+      await database.query(`
+        CREATE TABLE subcategories (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          category_id TEXT NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          slug VARCHAR(255) NOT NULL,
+          description TEXT,
+          icon VARCHAR(100),
+          image_url VARCHAR(500),
+          position INT DEFAULT 0,
+          is_active BOOLEAN DEFAULT true,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE(category_id, slug)
+        )
+      `)
+
+      // Create index
+      await database.query(
+        `CREATE INDEX IF NOT EXISTS idx_subcategories_category_id ON subcategories(category_id)`,
+      )
+
+      console.log('  ✅ Subcategories table created successfully')
+      return { created: true, fixed: false }
+    } else {
+      // Table exists, check if it has the right schema
+      const columns = await database.query(`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'subcategories'
+        ORDER BY ordinal_position
+      `)
+
+      const columnNames = columns.rows.map((r) => r.column_name)
+      const requiredColumns = [
+        'id',
+        'category_id',
+        'name',
+        'slug',
+        'description',
+        'icon',
+        'image_url',
+        'position',
+        'is_active',
+        'created_at',
+        'updated_at',
+      ]
+
+      const missingColumns = requiredColumns.filter((col) => !columnNames.includes(col))
+
+      if (missingColumns.length > 0) {
+        console.log(
+          `  ⚠️  Subcategories table exists but has missing columns: ${missingColumns.join(', ')}`,
+        )
+        console.log('  🔄 Recreating subcategories table with correct schema...')
+
+        // Drop and recreate
+        await database.query(`DROP TABLE IF EXISTS subcategories`)
+        await database.query(`
+          CREATE TABLE subcategories (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            category_id TEXT NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            slug VARCHAR(255) NOT NULL,
+            description TEXT,
+            icon VARCHAR(100),
+            image_url VARCHAR(500),
+            position INT DEFAULT 0,
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(category_id, slug)
+          )
+        `)
+
+        await database.query(
+          `CREATE INDEX IF NOT EXISTS idx_subcategories_category_id ON subcategories(category_id)`,
+        )
+
+        console.log('  ✅ Subcategories table fixed and recreated')
+        return { created: false, fixed: true }
+      } else {
+        console.log('  ✅ Subcategories table already exists with correct schema')
+        return { created: false, fixed: false }
+      }
+    }
+  } catch (error) {
+    console.error('❌ [MIGRATION] Error with subcategories table:', error.message)
+    return { error: error.message }
+  }
+}
+
+/**
  * Create indexes for better query performance
  */
 async function createIndexes() {
@@ -381,6 +489,9 @@ export async function runProductsMigration() {
     console.log('\n📑 [DATABASE MIGRATION] Creating indexes...')
     const indexesCreated = await createIndexes()
     console.log(`✅ [DATABASE MIGRATION] ${indexesCreated} indexes verified/created`)
+
+    console.log('\n📑 [DATABASE MIGRATION] Ensuring subcategories table...')
+    const subcategoriesResult = await ensureSubcategoriesTable()
 
     console.log('\n✅ [DATABASE MIGRATION] Migration Summary:')
     console.log(`   • Added columns: ${addedCount}`)
