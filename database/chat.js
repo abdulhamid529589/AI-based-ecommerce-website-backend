@@ -174,9 +174,7 @@ export async function getOwnerConversations(ownerId) {
               (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND is_read = false AND is_owner = false) as unread_count
        FROM conversations c
        JOIN users u ON c.user_id = u.id
-       WHERE c.status = 'open'
-       ORDER BY c.last_message_at DESC NULLS LAST`,
-      [ownerId],
+       ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
     )
 
     return result.rows
