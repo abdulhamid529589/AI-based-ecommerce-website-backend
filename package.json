@@ -11,7 +11,17 @@
     "migrate": "node scripts/migrate-products-table.js",
     "db:migrate": "node scripts/database-migration.js",
     "db:test": "node scripts/database-migration.js --test",
-    "prepare:deploy": "bash scripts/prepare-render-deployment.sh"
+    "prepare:deploy": "bash scripts/prepare-render-deployment.sh",
+    "check:columns": "node scripts/check-missing-columns.js",
+    "check:env": "node scripts/check-env.js",
+    "check:integrity": "node scripts/check-integrity.js",
+    "fix:subcategories": "node scripts/fix-subcategories-table.js",
+    "create:subcategories": "node scripts/create-subcategories-table.js",
+    "check:settings": "node scripts/check_settings_columns.js",
+    "health:check": "node scripts/db-health-check.js",
+    "db:cleanup": "node scripts/db-cleanup.js",
+    "diagnostics": "node scripts/diagnostics.js",
+    "deploy": "node scripts/migration-manager.js && node server.js"
   },
   "keywords": [],
   "author": "",
