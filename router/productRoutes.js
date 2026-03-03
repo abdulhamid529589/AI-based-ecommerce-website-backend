@@ -24,7 +24,12 @@ import {
   removeFromWishlist,
   getWishlistCount,
 } from '../controllers/wishlistController.js'
-import { getShopInfo, getHeroSlides } from '../controllers/settingsController.js'
+import {
+  getShopInfo,
+  getHeroSlides,
+  getChatSettings,
+  updateChatSettings,
+} from '../controllers/settingsController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
 import { validateRequest } from '../middlewares/validationMiddleware.js'
 
@@ -33,6 +38,8 @@ const router = express.Router()
 // Public settings endpoints
 router.get('/settings/shop-info', getShopInfo)
 router.get('/settings/hero-slides', getHeroSlides)
+router.get('/settings/chat', getChatSettings)
+router.put('/settings/chat', isAuthenticated, authorizedRoles('Admin'), updateChatSettings)
 
 router.post(
   '/admin/create',

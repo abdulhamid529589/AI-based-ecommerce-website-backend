@@ -219,6 +219,24 @@ export async function closeConversation(conversationId) {
   }
 }
 
+/**
+ * Delete conversation and all its messages
+ */
+export async function deleteConversation(conversationId) {
+  try {
+    // Delete messages first (foreign key constraint)
+    await database.query(`DELETE FROM messages WHERE conversation_id = $1`, [conversationId])
+
+    // Delete conversation
+    await database.query(`DELETE FROM conversations WHERE id = $1`, [conversationId])
+
+    return true
+  } catch (error) {
+    console.error('Error deleting conversation:', error.message)
+    throw error
+  }
+}
+
 export default {
   createChatTables,
   getOrCreateConversation,
@@ -228,4 +246,5 @@ export default {
   getOwnerConversations,
   markMessagesAsRead,
   closeConversation,
+  deleteConversation,
 }

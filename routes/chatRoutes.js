@@ -11,6 +11,7 @@ import {
   getMessages,
   startChat,
   closeChatConversation,
+  deleteChatConversation,
 } from '../controllers/chatController.js'
 
 const router = express.Router()
@@ -26,5 +27,6 @@ router.get('/:conversationId/messages', getMessages) // Get conversation message
 // Owner/Admin routes
 router.get('/admin/conversations', authorizedRoles('Admin'), getOwnerChats) // Get all conversations
 router.put('/:conversationId/close', closeChatConversation) // Close conversation
+router.delete('/:conversationId', deleteChatConversation) // Delete conversation - auth check in controller
 
 export default router

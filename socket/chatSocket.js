@@ -10,6 +10,7 @@ import {
   getConversationMessages,
   markMessagesAsRead,
 } from '../database/chat.js'
+import { getSetting } from '../models/settingsTable.js'
 
 const logger = createLogger('Chat.Socket')
 
@@ -106,8 +107,11 @@ export function initializeChatSocket(io) {
           const allMessages = await getConversationMessages(conversationId)
           if (allMessages.length === 1) {
             // This is the first message
-            setTimeout(() => {
-              const autoReplyMessage = `Thanks for contacting us! 🙏\n\nWe appreciate your message. Our owner will get back to you shortly.\n\n📱 WhatsApp: +880 1234 567890\n\nWe're here to help!`
+            setTimeout(async () => {
+              // Fetch WhatsApp number from settings
+              const whatsappNumber = (await getSetting('whatsappNumber')) || '+880 1234 567890'
+
+              const autoReplyMessage = `Thanks for contacting us! 🙏\n\nWe appreciate your message. Our owner will get back to you shortly.\n\n📱 WhatsApp: ${whatsappNumber}\n\nWe're here to help!`
 
               chatNamespace.to(`conversation:${conversationId}`).emit('new-message', {
                 id: 'auto-reply-' + Date.now(),

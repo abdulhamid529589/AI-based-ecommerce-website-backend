@@ -246,6 +246,12 @@ const csrfMiddleware = (req, res, next) => {
       return next()
     }
 
+    // Chat endpoints are JWT-authenticated, don't need CSRF
+    if (req.path.startsWith('/chat/') && req.headers.authorization?.startsWith('Bearer ')) {
+      console.log(`[CSRF] ✅ Exempting chat endpoint with JWT auth: ${req.path}`)
+      return next()
+    }
+
     console.log(`[CSRF] ⚠️ Checking CSRF token for: ${req.path}`)
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)

@@ -636,3 +636,61 @@ export const uploadImage = async (req, res) => {
     })
   }
 }
+
+/**
+ * Get chat settings (WhatsApp number)
+ */
+export const getChatSettings = async (req, res) => {
+  try {
+    const whatsappNumber = await getSetting('whatsappNumber')
+
+    res.status(200).json({
+      success: true,
+      whatsappNumber: whatsappNumber || '',
+    })
+  } catch (error) {
+    console.error('Error fetching chat settings:', error.message)
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching chat settings',
+      error: error.message,
+    })
+  }
+}
+
+/**
+ * Update chat settings (WhatsApp number)
+ */
+export const updateChatSettings = async (req, res) => {
+  try {
+    const { whatsappNumber } = req.body
+
+    console.log('[CHAT-SETTINGS] Updating WhatsApp number:', {
+      whatsappNumber,
+      user: req.user?.id,
+      userRole: req.user?.role,
+    })
+
+    if (!whatsappNumber || typeof whatsappNumber !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'WhatsApp number is required and must be a string',
+      })
+    }
+
+    await setSetting('whatsappNumber', whatsappNumber)
+
+    res.status(200).json({
+      success: true,
+      message: 'Chat settings updated successfully',
+      whatsappNumber,
+    })
+  } catch (error) {
+    console.error('Error updating chat settings:', error.message)
+    res.status(500).json({
+      success: false,
+      message: 'Error updating chat settings',
+      error: error.message,
+    })
+  }
+}

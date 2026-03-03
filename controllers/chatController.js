@@ -10,6 +10,7 @@ import {
   getConversationMessages,
   markMessagesAsRead,
   closeConversation,
+  deleteConversation,
 } from '../database/chat.js'
 
 /**
@@ -150,10 +151,56 @@ export const closeChatConversation = async (req, res) => {
   }
 }
 
+/**
+ * Delete conversation
+ */
+export const deleteChatConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params
+
+    // Log request details
+    console.log('[CHAT-DELETE] Request:', {
+      conversationId,
+      userId: req.user?.id,
+      userRole: req.user?.role,
+      isAuthenticated: !!req.user,
+    })
+
+    // Check authorization
+    if (!req.user || req.user.role !== 'Admin') {
+      console.error('[CHAT-DELETE] Authorization failed:', {
+        hasUser: !!req.user,
+        userRole: req.user?.role,
+        required: 'Admin',
+      })
+      return res.status(403).json({
+        success: false,
+        message: 'Only admins can delete conversations',
+      })
+    }
+
+    await deleteConversation(conversationId)
+
+    console.log('[CHAT-DELETE] Conversation deleted:', conversationId)
+
+    res.status(200).json({
+      success: true,
+      message: 'Conversation deleted successfully',
+    })
+  } catch (error) {
+    console.error('[CHAT] Error deleting conversation:', error.message)
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting conversation',
+    })
+  }
+}
+
 export default {
   getUserChats,
   getOwnerChats,
   getMessages,
   startChat,
   closeChatConversation,
+  deleteChatConversation,
 }
