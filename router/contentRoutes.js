@@ -43,6 +43,7 @@ import {
   // Categories
   getCategories,
 } from '../controllers/contentController.js'
+import { getCategoriesWithSubcategories_Controller } from '../controllers/subcategoryController.js'
 import { isAuthenticated, authorizedRoles } from '../middlewares/authMiddleware.js'
 
 const router = express.Router()
@@ -140,5 +141,7 @@ router.post('/global', isAuthenticated, authorizedRoles('Admin'), updateGlobalSe
 // CATEGORIES (Public - for frontend)
 // ============================================
 router.get('/categories', getCategories)
+// Categories with subcategories - PUBLIC
+router.get('/categories-with-subcategories', getCategoriesWithSubcategories_Controller)
 
 export default router

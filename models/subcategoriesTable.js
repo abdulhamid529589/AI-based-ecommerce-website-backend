@@ -1,4 +1,5 @@
 import database from '../database/db.js'
+import { getSetting } from './settingsTable.js'
 
 /**
  * Create subcategories table for managing nested category structure
@@ -142,41 +143,45 @@ export const deleteSubcategory = async (subcategoryId) => {
 
 /**
  * Get categories with their subcategories
+ * Categories come from settings (JSON), subcategories from database
  */
 export const getCategoriesWithSubcategories = async () => {
-  const { rows } = await database.query(`
-    SELECT
-      c.id,
-      c.name,
-      c.slug,
-      c.description,
-      c.icon,
-      c.image_url,
-      c.position,
-      c.is_active,
-      c.created_at,
-      c.updated_at,
-      COALESCE(json_agg(
-        CASE WHEN s.id IS NOT NULL THEN
-          json_build_object(
-            'id', s.id,
-            'name', s.name,
-            'slug', s.slug,
-            'description', s.description,
-            'icon', s.icon,
-            'image_url', s.image_url,
-            'position', s.position,
-            'is_active', s.is_active
-          )
-        END
-      ) FILTER (WHERE s.id IS NOT NULL), '[]'::json) as subcategories
-    FROM categories c
-    LEFT JOIN subcategories s ON c.id::text = s.category_id AND s.is_active = true
-    WHERE c.is_active = true
-    GROUP BY c.id, c.name, c.slug, c.description, c.icon, c.image_url, c.position, c.is_active, c.created_at, c.updated_at
-    ORDER BY c.position ASC, c.created_at DESC
-  `)
-  return rows
+  try {
+    const categories = await getSetting('categories')
+
+    if (!Array.isArray(categories)) {
+      return []
+    }
+
+    // For each category, fetch its subcategories from the database
+    const categoriesWithSubs = await Promise.all(
+      categories.map(async (category) => {
+        const { rows: subcategories } = await database.query(
+          `SELECT id, name, slug, description, icon, image_url, position, is_active
+           FROM subcategories
+           WHERE category_id = $1 AND is_active = true
+           ORDER BY position ASC, created_at DESC`,
+          [category.id],
+        )
+
+        return {
+          id: category.id,
+          name: category.name,
+          slug: category.slug,
+          description: category.description || '',
+          image: category.image || '',
+          isVisible: category.isVisible !== undefined ? category.isVisible : true,
+          order: category.order || 0,
+          subcategories: subcategories || [],
+        }
+      }),
+    )
+
+    return categoriesWithSubs
+  } catch (error) {
+    console.error('Error fetching categories with subcategories:', error)
+    return []
+  }
 }
 
 /**
