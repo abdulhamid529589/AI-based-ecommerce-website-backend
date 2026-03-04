@@ -151,19 +151,49 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       )
     })
 
-    // Calculate shipping based on district (from frontend)
+    // Calculate shipping based on settings from database
     const district = city ? city.toLowerCase().trim() : ''
     let shipping_price = 0
 
-    // Apply Bangladesh shipping rates
-    if (district === 'chittagong' || district === 'চট্টগ্রাম') {
-      shipping_price = 60 // ৳60 for Chittagong
-    } else {
-      shipping_price = 100 // ৳100 for other districts
+    // Get shipping settings from database
+    try {
+      const { getSetting } = await import('../models/settingsTable.js')
+      const shippingSettings = await getSetting('shipping_settings')
+
+      if (shippingSettings?.shipping) {
+        // Check free shipping threshold
+        if (
+          shippingSettings.shipping.freeShippingEnabled &&
+          subtotal_price >= shippingSettings.shipping.freeShippingThreshold
+        ) {
+          shipping_price = 0 // Free shipping
+        } else {
+          shipping_price = shippingSettings.shipping.standardShippingCost || 100
+        }
+      } else {
+        // Fallback to hardcoded values if settings not found
+        shipping_price = 100
+      }
+    } catch (err) {
+      console.warn('Could not load shipping settings, using defaults:', err.message)
+      shipping_price = 100
     }
 
-    // 🔒 CRITICAL FIX #4: Calculate tax on SERVER (5% of subtotal)
-    const tax_price = Math.round(subtotal_price * 0.05)
+    // Get tax rate from settings
+    let tax_rate = 0.05 // Default 5%
+    try {
+      const { getSetting } = await import('../models/settingsTable.js')
+      const shippingSettings = await getSetting('shipping_settings')
+
+      if (shippingSettings?.pricing?.taxRate) {
+        tax_rate = shippingSettings.pricing.taxRate / 100
+      }
+    } catch (err) {
+      console.warn('Could not load tax settings, using default 5%:', err.message)
+    }
+
+    // Calculate tax on SERVER (dynamic tax rate from settings)
+    const tax_price = Math.round(subtotal_price * tax_rate)
 
     // Calculate final total: subtotal + shipping + tax
     const total_price = Math.round(subtotal_price + shipping_price + tax_price)

@@ -478,35 +478,81 @@ export const getThemeCustomization = async (req, res) => {
 export const getShipping = async (req, res) => {
   try {
     const shipping = await getSetting('shipping_settings')
-    if (shipping) return res.status(200).json(shipping)
+
+    // If data exists, return it with all fields
+    if (shipping) {
+      console.log('[getShipping] ✅ Returning saved shipping data')
+      return res.status(200).json({
+        data: shipping,
+      })
+    }
+
+    // Return default structure matching frontend expectations
+    console.log('[getShipping] No shipping data found, returning defaults')
     return res.status(200).json({
-      zones: [],
-      methods: [],
-      deliverySettings: {
-        processingTime: '1-3 days',
-        standardDelivery: '5-7 days',
-        expressDelivery: '2-3 days',
-        orderCutoff: '14:00',
-      },
-      packagingOptions: {
-        giftWrap: true,
-        giftWrapCost: 0,
-        giftMessage: true,
-        boxSizes: [],
+      data: {
+        shipping: {
+          freeShippingEnabled: true,
+          freeShippingThreshold: 5000,
+          standardShippingCost: 100,
+          expressShippingCost: 200,
+          shippingZones: [
+            { id: 1, name: 'Chattogram', cost: 60, deliveryDays: '2-3 days' },
+            { id: 2, name: 'All Other Districts', cost: 100, deliveryDays: '3-5 days' },
+          ],
+        },
+        pricing: {
+          currency: 'BDT',
+          taxRate: 0,
+          taxMode: 'exclusive',
+        },
+        inventory: {
+          lowStockThreshold: 10,
+          allowBackorders: true,
+          backorderDays: 7,
+          minOrderQuantity: 1,
+          maxOrderQuantity: 100,
+        },
+        paymentMethods: [
+          { id: 'bkash', name: 'bKash', enabled: true },
+          { id: 'nagad', name: 'Nagad', enabled: true },
+          { id: 'rocket', name: 'Rocket', enabled: false },
+          { id: 'cod', name: 'Cash on Delivery', enabled: true },
+        ],
+        returns: {
+          returnEnabled: true,
+          returnWindowDays: 30,
+          refundProcessingDays: 5,
+          restockingFee: 5,
+        },
       },
     })
   } catch (error) {
+    console.error('[getShipping] Error:', error)
     res.status(500).json({ message: 'Error fetching shipping settings', error: error.message })
   }
 }
 
 export const updateShipping = async (req, res) => {
   try {
-    const { zones, methods, deliverySettings, packagingOptions } = req.body
-    const shipping = { zones, methods, deliverySettings, packagingOptions }
-    await setSetting('shipping_settings', shipping)
-    res.status(200).json({ message: 'Shipping settings updated' })
+    const shippingData = req.body
+
+    // Save the complete ordering system settings
+    console.log('[updateShipping] Saving shipping data:', {
+      hasShipping: !!shippingData.shipping,
+      hasPricing: !!shippingData.pricing,
+      hasInventory: !!shippingData.inventory,
+      hasPaymentMethods: !!shippingData.paymentMethods,
+      hasReturns: !!shippingData.returns,
+    })
+
+    await setSetting('shipping_settings', shippingData)
+    res.status(200).json({
+      message: 'Shipping settings updated',
+      data: shippingData,
+    })
   } catch (error) {
+    console.error('[updateShipping] Error:', error)
     res.status(500).json({ message: 'Error updating shipping settings', error: error.message })
   }
 }
