@@ -5,6 +5,7 @@
 
 import database from '../database/db.js'
 import { catchAsyncErrors } from '../middlewares/catchAsyncError.js'
+import ErrorHandler from '../middlewares/errorMiddleware.js'
 
 /**
  * Get reviews for a product
@@ -69,6 +70,89 @@ export const getProductReviews = catchAsyncErrors(async (req, res) => {
       limit: parseInt(limit),
       total,
       pages: Math.ceil(total / limit),
+    },
+    timestamp: new Date(),
+  })
+})
+
+/**
+ * Admin: list reviews across all products
+ * GET /api/v1/admin/reviews
+ */
+export const getAllReviewsAdmin = catchAsyncErrors(async (req, res, next) => {
+  const { page = 1, limit = 20, status, q } = req.query
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1)
+  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100)
+  const offset = (pageNum - 1) * limitNum
+
+  const allowedStatuses = new Set(['pending', 'approved', 'rejected'])
+  const statusFilter = status && allowedStatuses.has(String(status)) ? String(status) : null
+  const search = q ? String(q).trim() : ''
+
+  const where = []
+  const params = []
+
+  if (statusFilter) {
+    params.push(statusFilter)
+    where.push(`r.moderation_status = $${params.length}`)
+  }
+
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`)
+    const idx = params.length
+    where.push(
+      `(LOWER(p.name) LIKE $${idx} OR LOWER(COALESCE(u.name, '')) LIKE $${idx} OR LOWER(COALESCE(r.content, r.comment, '')) LIKE $${idx})`,
+    )
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
+  const listQuery = `
+    SELECT
+      r.id,
+      r.product_id,
+      r.user_id,
+      r.rating,
+      r.title,
+      COALESCE(r.content, r.comment) AS content,
+      r.created_at,
+      r.updated_at,
+      r.verified_purchase,
+      r.helpful_count,
+      r.moderation_status,
+      p.name AS product_name,
+      COALESCE(u.name, 'Anonymous') AS user_name,
+      u.email AS user_email
+    FROM reviews r
+    JOIN products p ON r.product_id = p.id
+    LEFT JOIN users u ON r.user_id = u.id
+    ${whereSql}
+    ORDER BY r.created_at DESC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+  `
+
+  const countQuery = `
+    SELECT COUNT(*)::int AS count
+    FROM reviews r
+    JOIN products p ON r.product_id = p.id
+    LEFT JOIN users u ON r.user_id = u.id
+    ${whereSql}
+  `
+
+  const listParams = [...params, limitNum, offset]
+  const [listResult, countResult] = await Promise.all([
+    database.query(listQuery, listParams),
+    database.query(countQuery, params),
+  ])
+
+  res.status(200).json({
+    success: true,
+    message: 'Reviews retrieved successfully',
+    data: {
+      items: listResult.rows,
+      page: pageNum,
+      limit: limitNum,
+      total: countResult.rows[0]?.count || 0,
     },
     timestamp: new Date(),
   })

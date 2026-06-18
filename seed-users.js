@@ -10,11 +10,11 @@ async function seedUsers() {
 
     // Check if admin exists
     const adminExists = await database.query('SELECT id FROM users WHERE email = $1', [adminEmail])
-    
+
     if (adminExists.rows.length === 0) {
       await database.query(
-        'INSERT INTO users (email, password, role, created_at) VALUES ($1, $2, $3, $4)',
-        [adminEmail, hashedAdminPassword, 'Admin', new Date()]
+        'INSERT INTO users (name, email, password, role, created_at) VALUES ($1, $2, $3, $4, $5)',
+        ['Admin User', adminEmail, hashedAdminPassword, 'Admin', new Date()]
       )
       console.log('✅ Admin user created: admin@example.com / adminPassword123')
     } else {
@@ -27,11 +27,11 @@ async function seedUsers() {
     const hashedCustomerPassword = await bcrypt.hash(customerPassword, 10)
 
     const customerExists = await database.query('SELECT id FROM users WHERE email = $1', [customerEmail])
-    
+
     if (customerExists.rows.length === 0) {
       await database.query(
-        'INSERT INTO users (email, password, role, created_at) VALUES ($1, $2, $3, $4)',
-        [customerEmail, hashedCustomerPassword, 'Customer', new Date()]
+        'INSERT INTO users (name, email, password, role, created_at) VALUES ($1, $2, $3, $4, $5)',
+        ['Customer User', customerEmail, hashedCustomerPassword, 'User', new Date()]
       )
       console.log('✅ Customer user created: customer@example.com / customerPassword123')
     } else {

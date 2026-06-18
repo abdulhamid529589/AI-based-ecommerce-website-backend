@@ -259,16 +259,17 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     }
 
     // 🔒 Log order creation for payment
-    await logOrderCreation(req.user.id, orderId, total_price, payment_method, 'SUCCESS')
+    await logOrderCreation(req.user.id, orderId, total_price, paymentMethod, 'SUCCESS')
 
     res.status(200).json({
       success: true,
       message: 'Order placed successfully. Please proceed to payment.',
       orderId,
+      order: { id: orderId },
       total_price,
       tax_price,
       shipping_price,
-      paymentMethod: payment_method,
+      paymentMethod,
     })
   } catch (error) {
     console.error('Order creation error:', error.message)
@@ -319,6 +320,7 @@ GROUP BY o.id, s.id;
   res.status(200).json({
     success: true,
     message: 'Order fetched.',
+    order: result.rows[0],
     orders: result.rows[0],
   })
 })

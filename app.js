@@ -194,26 +194,28 @@ app.get('/api/v1/csrf-token', (req, res) => {
   res.json({ csrfToken: token, success: true })
 })
 
-// DEBUG: Endpoint to check current user's token role
-app.get('/api/v1/debug/token-role', isAuthenticated, (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  let tokenRole = 'unknown'
-  if (token) {
-    try {
-      const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString())
-      tokenRole = payload.role
-    } catch (e) {
-      tokenRole = 'decode-error'
+// DEBUG: Endpoint to check current user's token role (development only)
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/v1/debug/token-role', isAuthenticated, (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '')
+    let tokenRole = 'unknown'
+    if (token) {
+      try {
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString())
+        tokenRole = payload.role
+      } catch (e) {
+        tokenRole = 'decode-error'
+      }
     }
-  }
-  res.json({
-    dbRole: req.user?.role,
-    tokenRole: tokenRole,
-    userId: req.user?.id,
-    userName: req.user?.name,
-    match: req.user?.role === tokenRole,
+    res.json({
+      dbRole: req.user?.role,
+      tokenRole: tokenRole,
+      userId: req.user?.id,
+      userName: req.user?.name,
+      match: req.user?.role === tokenRole,
+    })
   })
-})
+}
 
 // CSRF validation middleware
 const csrfMiddleware = (req, res, next) => {
@@ -224,6 +226,12 @@ const csrfMiddleware = (req, res, next) => {
     // File uploads are JWT-authenticated, don't need CSRF
     if (req.path === '/upload/image' || req.path === '/upload') {
       console.log(`[CSRF] ✅ Exempting file upload: ${req.path}`)
+      return next()
+    }
+
+    // Payment gateway webhooks/callbacks must not require CSRF
+    if (req.path.includes('/callback')) {
+      console.log(`[CSRF] ✅ Exempting payment callback: ${req.path}`)
       return next()
     }
 

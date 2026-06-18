@@ -29,6 +29,7 @@ import {
   getHeroSlides,
   getChatSettings,
   updateChatSettings,
+  getShipping,
 } from '../controllers/settingsController.js'
 import { authorizedRoles, isAuthenticated } from '../middlewares/authMiddleware.js'
 import { validateRequest } from '../middlewares/validationMiddleware.js'
@@ -38,6 +39,7 @@ const router = express.Router()
 // Public settings endpoints
 router.get('/settings/shop-info', getShopInfo)
 router.get('/settings/hero-slides', getHeroSlides)
+router.get('/settings/shipping', getShipping)
 router.get('/settings/chat', getChatSettings)
 router.put('/settings/chat', isAuthenticated, authorizedRoles('Admin'), updateChatSettings)
 

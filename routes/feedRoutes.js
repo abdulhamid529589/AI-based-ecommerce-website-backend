@@ -13,6 +13,8 @@ const router = express.Router()
  * GET /api/v1/feed
  * Get personalized feed for user
  */
+router.get('/', getPersonalizedFeed)
+
 router.get('/feed', getPersonalizedFeed)
 
 /**

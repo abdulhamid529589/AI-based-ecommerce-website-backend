@@ -4,6 +4,8 @@
  */
 
 import { createLogger } from '../utils/logger.js'
+import jwt from 'jsonwebtoken'
+import database from '../database/db.js'
 import {
   getOrCreateConversation,
   saveMessage,
@@ -21,8 +23,40 @@ const activeChatUsers = new Map()
  * Initialize chat socket handlers
  */
 export function initializeChatSocket(io) {
-  // Chat namespace
   const chatNamespace = io.of('/chat')
+
+  chatNamespace.use(async (socket, next) => {
+    try {
+      const token =
+        socket.handshake.auth?.token ||
+        socket.handshake.headers?.authorization?.replace('Bearer ', '')
+
+      if (!token) {
+        return next()
+      }
+
+      const decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY,
+      )
+
+      const userResult = await database.query(
+        'SELECT id, role, name FROM users WHERE id = $1',
+        [decoded.id],
+      )
+
+      if (userResult.rows.length === 0) {
+        return next(new Error('Authentication error'))
+      }
+
+      socket.data.userId = userResult.rows[0].id
+      socket.data.userRole = userResult.rows[0].role
+      socket.data.userName = userResult.rows[0].name
+      next()
+    } catch (error) {
+      next(new Error('Authentication error'))
+    }
+  })
 
   chatNamespace.on('connection', (socket) => {
     logger.info('💬 User connected to chat', {
@@ -35,10 +69,16 @@ export function initializeChatSocket(io) {
      */
     socket.on('join-chat', async (data) => {
       try {
-        const { userId, conversationId } = data
+        const { conversationId } = data
+        const userId = socket.data.userId || data.userId
 
-        if (!userId) {
-          socket.emit('error', { message: 'User ID required' })
+        if (!userId || !conversationId) {
+          socket.emit('error', { message: 'User ID and conversation ID required' })
+          return
+        }
+
+        if (socket.data.userId && data.userId && data.userId !== socket.data.userId) {
+          socket.emit('error', { message: 'Unauthorized' })
           return
         }
 
@@ -74,10 +114,21 @@ export function initializeChatSocket(io) {
      */
     socket.on('send-message', async (data) => {
       try {
-        const { conversationId, message, userId, isOwner } = data
+        const { conversationId, message, isOwner } = data
+        const userId = socket.data.userId || data.userId
 
         if (!message || !conversationId || !userId) {
           socket.emit('error', { message: 'Missing required fields' })
+          return
+        }
+
+        if (socket.data.userId && data.userId && data.userId !== socket.data.userId) {
+          socket.emit('error', { message: 'Unauthorized' })
+          return
+        }
+
+        if (isOwner && socket.data.userRole !== 'Admin') {
+          socket.emit('error', { message: 'Only admins can send owner messages' })
           return
         }
 
@@ -138,7 +189,12 @@ export function initializeChatSocket(io) {
      */
     socket.on('mark-read', async (data) => {
       try {
-        const { conversationId, userId } = data
+        const { conversationId } = data
+        const userId = socket.data.userId || data.userId
+
+        if (!conversationId || !userId) {
+          return
+        }
 
         await markMessagesAsRead(conversationId, userId)
 

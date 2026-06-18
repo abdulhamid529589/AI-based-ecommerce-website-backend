@@ -26,8 +26,8 @@ export const initializeSocket = (httpServer) => {
   }
 
   const allowedOrigins = [
-    'http://localhost:5173', // Dashboard
-    'http://localhost:5174', // Frontend shop
+    'http://localhost:5173', // Storefront
+    'http://localhost:5174', // Admin dashboard
     'http://localhost:3000', // Alternative frontend port
     process.env.FRONTEND_URL || '',
     process.env.DASHBOARD_URL || '',

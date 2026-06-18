@@ -1,4 +1,7 @@
 import jwt from 'jsonwebtoken'
+import { sanitizeUser } from './sanitizeUser.js'
+
+const isProduction = process.env.NODE_ENV === 'production'
 
 export const sendToken = (user, statusCode, message, res) => {
   const secretKeyAccess = process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY
@@ -37,7 +40,7 @@ export const sendToken = (user, statusCode, message, res) => {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
       sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: true, // ✅ CRITICAL: Always require HTTPS
+      secure: isProduction,
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
@@ -45,7 +48,7 @@ export const sendToken = (user, statusCode, message, res) => {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
       sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: true, // ✅ CRITICAL: Always require HTTPS
+      secure: isProduction,
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
@@ -53,13 +56,13 @@ export const sendToken = (user, statusCode, message, res) => {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       httpOnly: true,
       sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: true, // ✅ CRITICAL: Always require HTTPS
+      secure: isProduction,
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
     .json({
       success: true,
-      user,
+      user: sanitizeUser(user),
       message,
       // 🔒 Return tokens in response for SPA/frontend compatibility
       // Frontend stores in localStorage for persistence

@@ -1172,11 +1172,18 @@ export const getProductReviews = catchAsyncErrors(async (req, res, next) => {
 // Approve/Unapprove review
 export const updateReviewStatus = catchAsyncErrors(async (req, res, next) => {
   const { reviewId } = req.params
-  const { approved } = req.body
+  const { status } = req.body
+
+  const normalizedStatus =
+    status === 'approved' || status === 'rejected' || status === 'pending' ? status : null
+
+  if (!normalizedStatus) {
+    return next(new ErrorHandler('Invalid review status.', 400))
+  }
 
   const result = await database.query(
-    'UPDATE reviews SET approved = $1 WHERE id = $2 RETURNING *',
-    [approved, reviewId],
+    'UPDATE reviews SET moderation_status = $1, moderated_at = NOW() WHERE id = $2 RETURNING *',
+    [normalizedStatus, reviewId],
   )
 
   if (result.rows.length === 0) {
@@ -1185,7 +1192,7 @@ export const updateReviewStatus = catchAsyncErrors(async (req, res, next) => {
 
   res.status(200).json({
     success: true,
-    message: `Review ${approved ? 'approved' : 'unapproved'} successfully.`,
+    message: `Review status updated to "${normalizedStatus}".`,
     review: result.rows[0],
   })
 })

@@ -4,6 +4,7 @@ import database from '../database/db.js'
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import { sendToken } from '../utils/jwtToken.js'
+import { sanitizeUser } from '../utils/sanitizeUser.js'
 import { generateResetPasswordToken } from '../utils/generateResetPasswordToken.js'
 import { generateEmailTemplate } from '../utils/generateForgotPasswordEmailTemplate.js'
 import { sendEmail } from '../utils/sendEmail.js'
@@ -12,7 +13,7 @@ import { v2 as cloudinary } from 'cloudinary'
 import { deleteTempFile } from '../utils/fileCleanup.js'
 
 export const register = catchAsyncErrors(async (req, res, next) => {
-  let { name, email, mobile, password, role } = req.body
+  let { name, email, mobile, password } = req.body
 
   // Validate inputs
   if (!name || !password) {
@@ -76,11 +77,10 @@ export const register = catchAsyncErrors(async (req, res, next) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10)
-  const userRole = role === 'Admin' ? 'Admin' : 'User'
 
   const user = await database.query(
     'INSERT INTO users (name, email, mobile, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [name, email || null, mobile || null, hashedPassword, userRole],
+    [name, email || null, mobile || null, hashedPassword, 'User'],
   )
   sendToken(user.rows[0], 201, 'User registered successfully', res)
 })
@@ -136,25 +136,24 @@ export const getUser = catchAsyncErrors(async (req, res, next) => {
   const { user } = req
   res.status(200).json({
     success: true,
-    user,
+    user: sanitizeUser(user),
   })
 })
 
 export const logout = catchAsyncErrors(async (req, res, next) => {
+  const clearCookieOptions = {
+    expires: new Date(Date.now()),
+    httpOnly: true,
+    sameSite: 'Lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  }
+
   res
     .status(200)
-    .cookie('accessToken', '', {
-      expires: new Date(Date.now()),
-      httpOnly: true,
-      sameSite: 'Lax',
-      secure: process.env.NODE_ENV === 'production',
-    })
-    .cookie('refreshToken', '', {
-      expires: new Date(Date.now()),
-      httpOnly: true,
-      sameSite: 'Lax',
-      secure: process.env.NODE_ENV === 'production',
-    })
+    .cookie('token', '', clearCookieOptions)
+    .cookie('accessToken', '', clearCookieOptions)
+    .cookie('refreshToken', '', clearCookieOptions)
     .json({
       success: true,
       message: 'Logged out successfully.',
