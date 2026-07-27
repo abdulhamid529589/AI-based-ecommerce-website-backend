@@ -9,7 +9,7 @@ export async function createUserTable() {
             email VARCHAR(100) UNIQUE,
             mobile VARCHAR(20) UNIQUE,
             password TEXT NOT NULL,
-            role VARCHAR(10) DEFAULT 'User' CHECK (role IN ('User', 'Admin')),
+            role VARCHAR(20) DEFAULT 'User' CHECK (role IN ('User', 'Vendor', 'Admin')),
             avatar JSONB DEFAULT NULL,
             reset_password_token TEXT DEFAULT NULL,
             reset_password_expire TIMESTAMP DEFAULT NULL,

@@ -43,6 +43,7 @@ import cartRouter from './routes/cartRoutes.js'
 import reviewRouter from './routes/reviewRoutes.js'
 import advancedReviewRouter from './routes/advancedReviewRoutes.js'
 import chatRouter from './routes/chatRoutes.js'
+import vendorRouter from './router/vendorRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -260,6 +261,22 @@ const csrfMiddleware = (req, res, next) => {
       return next()
     }
 
+    // Vendor endpoints with JWT Bearer — same trust model as admin
+    if (
+      (req.path.startsWith('/me/') || req.path.startsWith('/admin/')) &&
+      req.baseUrl?.includes('/vendor') &&
+      req.headers.authorization?.startsWith('Bearer ')
+    ) {
+      console.log(`[CSRF] ✅ Vendor endpoint with JWT auth: ${req.baseUrl}${req.path}`)
+      return next()
+    }
+
+    // Public vendor registration (mounted under /api/v1/vendor)
+    if (req.path === '/register' && req.baseUrl?.includes('/vendor')) {
+      console.log(`[CSRF] ✅ Exempting vendor register`)
+      return next()
+    }
+
     console.log(`[CSRF] ⚠️ Checking CSRF token for: ${req.path}`)
     const token =
       req.headers['x-csrf-token'] || req.headers['x-xsrf-token'] || (req.body && req.body._csrf)
@@ -374,6 +391,9 @@ app.use(advancedReviewRouter)
 
 // ✅ Phase 5: Live Chat - Real-time messaging
 app.use('/api/v1/chat', csrfMiddleware, chatRouter)
+
+// 🏪 Multi-vendor marketplace (JWT-authenticated mutations; CSRF optional with Bearer)
+app.use('/api/v1/vendor', csrfMiddleware, vendorRouter)
 
 // ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
 app.use('/api/v1', apiLimiter)

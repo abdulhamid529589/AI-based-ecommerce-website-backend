@@ -324,6 +324,13 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
       index++
     }
 
+    // Filter by vendor shop
+    if (req.query.shop || req.query.shopId) {
+      conditions.push(`p.shop_id = $${index}`)
+      values.push(req.query.shop || req.query.shopId)
+      index++
+    }
+
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
     // Get count of filtered products
@@ -349,10 +356,15 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
       SELECT p.*,
       COALESCE(rc.review_count, 0) AS review_count,
       CASE WHEN p.created_at >= NOW() - INTERVAL '30 days' THEN true ELSE false END AS is_new,
-      CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured
+      CASE WHEN fp.id IS NOT NULL THEN true ELSE false END AS is_featured,
+      s.name AS shop_name,
+      s.slug AS shop_slug,
+      s.is_verified AS shop_verified,
+      s.logo AS shop_logo
       FROM products p
       LEFT JOIN (SELECT product_id, COUNT(*) AS review_count FROM reviews GROUP BY product_id) rc ON p.id = rc.product_id
       LEFT JOIN featured_products fp ON p.id = fp.product_id AND fp.is_active = true
+      LEFT JOIN shops s ON s.id = p.shop_id AND s.status = 'approved'
       ${whereClause}
       ORDER BY p.created_at DESC
       LIMIT ${paginationPlaceholders.limit}
@@ -678,6 +690,11 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
       `
         SELECT p.*,
         COUNT(r.id) AS review_count,
+        s.name AS shop_name,
+        s.slug AS shop_slug,
+        s.is_verified AS shop_verified,
+        s.logo AS shop_logo,
+        s.rating AS shop_rating,
         COALESCE(
         json_agg(
         json_build_object(
@@ -699,8 +716,9 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
          FROM products p
          LEFT JOIN reviews r ON p.id = r.product_id
          LEFT JOIN users u ON r.user_id = u.id
+         LEFT JOIN shops s ON s.id = p.shop_id AND s.status = 'approved'
          WHERE p.id = $1
-         GROUP BY p.id`,
+         GROUP BY p.id, s.id`,
       [productId],
     )
 
@@ -711,8 +729,34 @@ export const fetchSingleProduct = catchAsyncErrors(async (req, res, next) => {
 
     let product = result.rows[0]
 
-    // Normalize the product (parse JSON, convert types)
+  // Normalize the product (parse JSON, convert types)
     product = normalizeProduct(product)
+
+    // Attach nested vendor/shop object for storefront UX
+    if (product.shop_id && product.shop_name) {
+      let logo = product.shop_logo
+      if (typeof logo === 'string') {
+        try {
+          logo = JSON.parse(logo)
+        } catch {
+          /* keep */
+        }
+      }
+      product.vendor = {
+        id: product.shop_id,
+        name: product.shop_name,
+        slug: product.shop_slug,
+        is_verified: product.shop_verified,
+        logo,
+        rating: product.shop_rating != null ? parseFloat(product.shop_rating) : 0,
+      }
+    } else {
+      product.vendor = {
+        name: 'Official Store',
+        slug: null,
+        is_verified: true,
+      }
+    }
 
     console.log(`✅ [FETCH_SINGLE_PRODUCT] Product found:`, {
       id: product.id,

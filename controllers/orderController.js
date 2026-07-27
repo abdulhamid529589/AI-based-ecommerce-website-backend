@@ -94,13 +94,16 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       : JSON.parse(validatedData.orderedItems)
     const productIds = items.map((item) => item.product.id)
     const { rows: products } = await database.query(
-      `SELECT id, price, stock, name FROM products WHERE id = ANY($1::uuid[])`,
+      `SELECT p.id, p.price, p.stock, p.name, p.shop_id, p.images,
+              s.commission_rate, s.status AS shop_status, s.name AS shop_name
+       FROM products p
+       LEFT JOIN shops s ON s.id = p.shop_id
+       WHERE p.id = ANY($1::uuid[])`,
       [productIds],
     )
 
     let subtotal_price = 0
-    const values = []
-    const placeholders = []
+    const lineItems = []
 
     // 🔒 CRITICAL FIX #1: Validate each item quantity before processing
     for (const item of items) {
@@ -108,6 +111,16 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
 
       if (!product) {
         return next(new ErrorHandler(`Product not found for ID: ${item.product.id}`, 404))
+      }
+
+      // Block purchases from non-approved vendor shops (platform/legacy products OK)
+      if (product.shop_id && product.shop_status && product.shop_status !== 'approved') {
+        return next(
+          new ErrorHandler(
+            `"${product.name}" is unavailable — seller shop is not active.`,
+            400,
+          ),
+        )
       }
 
       // 🔒 Validate quantity is positive integer
@@ -131,24 +144,35 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     }
 
     // Calculate subtotal using database prices and validated quantities
-    items.forEach((item, index) => {
+    items.forEach((item) => {
       const product = products.find((p) => p.id === item.product.id)
-      const itemTotal = product.price * item.quantity
+      const itemTotal = parseFloat(product.price) * item.quantity
       subtotal_price += itemTotal
 
       // Get image URL safely - handle missing images array
-      const imageUrl =
-        item.product.images && item.product.images.length > 0 ? item.product.images[0].url : ''
+      let imageUrl = ''
+      try {
+        const imgs =
+          typeof product.images === 'string' ? JSON.parse(product.images) : product.images
+        if (Array.isArray(imgs) && imgs[0]) {
+          imageUrl = imgs[0].url || imgs[0] || ''
+        }
+      } catch {
+        imageUrl =
+          item.product.images && item.product.images.length > 0
+            ? item.product.images[0].url
+            : ''
+      }
 
-      values.push(null, product.id, item.quantity, product.price, imageUrl, product.name)
-
-      const offset = index * 6
-
-      placeholders.push(
-        `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${
-          offset + 5
-        }, $${offset + 6})`,
-      )
+      lineItems.push({
+        product_id: product.id,
+        shop_id: product.shop_id || null,
+        quantity: item.quantity,
+        price: parseFloat(product.price),
+        image: imageUrl,
+        title: product.name,
+        commission_rate: product.commission_rate != null ? parseFloat(product.commission_rate) : 10,
+      })
     })
 
     // Calculate shipping based on settings from database
@@ -205,17 +229,86 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
 
     const orderId = orderResult.rows[0].id
 
-    for (let i = 0; i < values.length; i += 6) {
-      values[i] = orderId
+    // 🏪 Split into per-vendor sub-orders (platform items use shop_id = null bucket)
+    const byShop = new Map()
+    for (const line of lineItems) {
+      const key = line.shop_id || '__platform__'
+      if (!byShop.has(key)) byShop.set(key, [])
+      byShop.get(key).push(line)
     }
 
-    await database.query(
-      `
-    INSERT INTO order_items (order_id, product_id, quantity, price, image, title)
-    VALUES ${placeholders.join(', ')} RETURNING *
-    `,
-      values,
-    )
+    const shopKeys = [...byShop.keys()]
+    const shippingPerShop = shopKeys.length
+      ? Math.round((shipping_price / shopKeys.length) * 100) / 100
+      : 0
+    const taxPerShop = shopKeys.length
+      ? Math.round((tax_price / shopKeys.length) * 100) / 100
+      : 0
+
+    const vendorOrderIds = new Map()
+
+    for (const [key, shopLines] of byShop.entries()) {
+      const shopSubtotal = shopLines.reduce((sum, l) => sum + l.price * l.quantity, 0)
+      const shopId = key === '__platform__' ? null : key
+      const commissionRate = shopLines[0]?.commission_rate ?? 10
+      const commissionAmount =
+        Math.round(((shopSubtotal * commissionRate) / 100) * 100) / 100
+      const vendorEarning = Math.round((shopSubtotal - commissionAmount) * 100) / 100
+
+      if (shopId) {
+        const vo = await database.query(
+          `INSERT INTO vendor_orders (
+             order_id, shop_id, subtotal, shipping_share, tax_share,
+             commission_rate, commission_amount, vendor_earning, status
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Processing')
+           RETURNING id`,
+          [
+            orderId,
+            shopId,
+            shopSubtotal,
+            shippingPerShop,
+            taxPerShop,
+            commissionRate,
+            commissionAmount,
+            vendorEarning,
+          ],
+        )
+        vendorOrderIds.set(shopId, vo.rows[0].id)
+
+        await database.query(
+          `UPDATE shops SET
+             total_orders = total_orders + 1,
+             total_sales = total_sales + $1,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [shopSubtotal, shopId],
+        )
+      }
+
+      for (const line of shopLines) {
+        await database.query(
+          `INSERT INTO order_items (
+             order_id, product_id, quantity, price, image, title, shop_id, vendor_order_id
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            orderId,
+            line.product_id,
+            line.quantity,
+            line.price,
+            line.image,
+            line.title,
+            shopId,
+            shopId ? vendorOrderIds.get(shopId) : null,
+          ],
+        )
+
+        // Decrement stock
+        await database.query(
+          `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2`,
+          [line.quantity, line.product_id],
+        )
+      }
+    }
 
     // Store shipping details in database
     try {
@@ -287,41 +380,88 @@ export const fetchSingleOrder = catchAsyncErrors(async (req, res, next) => {
   const result = await database.query(
     `
     SELECT
- o.*,
- COALESCE(
- json_agg(
-json_build_object(
-'order_item_id', oi.id,
-'order_id', oi.order_id,
-'product_id', oi.product_id,
-'quantity', oi.quantity,
-'price', oi.price
- )
- ) FILTER (WHERE oi.id IS NOT NULL), '[]'
- ) AS order_items,
- json_build_object(
- 'full_name', s.full_name,
- 'state', s.state,
- 'city', s.city,
- 'country', s.country,
- 'address', s.address,
- 'pincode', s.pincode,
- 'phone', s.phone
- ) AS shipping_info
-FROM orders o
-LEFT JOIN order_items oi ON o.id = oi.order_id
-LEFT JOIN shipping_info s ON o.id = s.order_id
-WHERE o.id = $1
-GROUP BY o.id, s.id;
-`,
+      o.*,
+      COALESCE(
+        json_agg(
+          jsonb_build_object(
+            'order_item_id', oi.id,
+            'order_id', oi.order_id,
+            'product_id', oi.product_id,
+            'quantity', oi.quantity,
+            'price', oi.price,
+            'image', oi.image,
+            'title', oi.title,
+            'shop_id', oi.shop_id,
+            'vendor_order_id', oi.vendor_order_id,
+            'shop_name', sh.name,
+            'shop_slug', sh.slug
+          )
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) AS order_items,
+      json_build_object(
+        'full_name', s.full_name,
+        'state', s.state,
+        'city', s.city,
+        'country', s.country,
+        'address', s.address,
+        'pincode', s.pincode,
+        'phone', s.phone
+      ) AS shipping_info
+    FROM orders o
+    LEFT JOIN order_items oi ON o.id = oi.order_id
+    LEFT JOIN shops sh ON sh.id = oi.shop_id
+    LEFT JOIN shipping_info s ON o.id = s.order_id
+    WHERE o.id = $1
+    GROUP BY o.id, s.id;
+    `,
     [orderId],
   )
+
+  if (!result.rows[0]) {
+    return next(new ErrorHandler('Order not found.', 404))
+  }
+
+  // Buyers can only see their own orders; Admin can see all
+  if (req.user.role !== 'Admin' && result.rows[0].buyer_id !== req.user.id) {
+    return next(new ErrorHandler('Not authorized to view this order.', 403))
+  }
+
+  // Attach vendor sub-orders (multi-vendor fulfillment)
+  const vendorOrders = await database.query(
+    `SELECT vo.*,
+            sh.name AS shop_name,
+            sh.slug AS shop_slug,
+            sh.logo AS shop_logo,
+            (
+              SELECT json_agg(json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'title', oi.title,
+                'quantity', oi.quantity,
+                'price', oi.price,
+                'image', oi.image
+              ))
+              FROM order_items oi
+              WHERE oi.vendor_order_id = vo.id
+            ) AS items
+     FROM vendor_orders vo
+     JOIN shops sh ON sh.id = vo.shop_id
+     WHERE vo.order_id = $1
+     ORDER BY vo.created_at ASC`,
+    [orderId],
+  )
+
+  const order = {
+    ...result.rows[0],
+    vendor_orders: vendorOrders.rows,
+  }
 
   res.status(200).json({
     success: true,
     message: 'Order fetched.',
-    order: result.rows[0],
-    orders: result.rows[0],
+    order,
+    orders: order,
   })
 })
 
@@ -337,7 +477,10 @@ export const fetchMyOrders = catchAsyncErrors(async (req, res, next) => {
  'quantity', oi.quantity,
  'price', oi.price,
  'image', oi.image,
- 'title', oi.title
+ 'title', oi.title,
+ 'shop_id', oi.shop_id,
+ 'shop_name', sh.name,
+ 'shop_slug', sh.slug
   )
  ) FILTER (WHERE oi.id IS NOT NULL), '[]'
  ) AS order_items,
@@ -361,9 +504,24 @@ json_build_object(
 ) AS user_info,
 COALESCE(p.payment_status, 'Pending') AS payment_status,
 p.payment_type,
-p.created_at AS payment_created_at
+p.created_at AS payment_created_at,
+(
+  SELECT COALESCE(json_agg(json_build_object(
+    'id', vo.id,
+    'shop_id', vo.shop_id,
+    'shop_name', vs.name,
+    'shop_slug', vs.slug,
+    'status', vo.status,
+    'subtotal', vo.subtotal,
+    'tracking_number', vo.tracking_number
+  ) ORDER BY vo.created_at), '[]')
+  FROM vendor_orders vo
+  JOIN shops vs ON vs.id = vo.shop_id
+  WHERE vo.order_id = o.id
+) AS vendor_orders
  FROM orders o
  LEFT JOIN order_items oi ON o.id = oi.order_id
+ LEFT JOIN shops sh ON sh.id = oi.shop_id
  LEFT JOIN shipping_info s ON o.id = s.order_id
  LEFT JOIN users u ON o.buyer_id = u.id
  LEFT JOIN payments p ON o.id = p.order_id

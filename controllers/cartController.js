@@ -10,25 +10,39 @@ export const getCart = catchAsyncErrors(async (req, res, next) => {
   const userId = req.user.id
 
   const result = await database.query(
-    `SELECT c.id as cart_item_id, c.quantity, p.id as product_id, p.name, p.price, p.images, p.category, p.stock
+    `SELECT c.id as cart_item_id, c.quantity, p.id as product_id, p.name, p.price, p.images, p.category, p.stock,
+            p.shop_id, s.name as shop_name, s.slug as shop_slug
      FROM cart_items c
      JOIN products p ON c.product_id = p.id
+     LEFT JOIN shops s ON s.id = p.shop_id
      WHERE c.user_id = $1
      ORDER BY c.created_at DESC`,
     [userId],
   )
 
   // Calculate totals
-  const items = result.rows.map((row) => ({
-    id: row.cart_item_id,
-    product_id: row.product_id,
-    quantity: row.quantity,
-    name: row.name,
-    price: parseFloat(row.price),
-    image: row.images && row.images.length > 0 ? row.images[0] : null,
-    category: row.category,
-    stock: row.stock,
-  }))
+  const items = result.rows.map((row) => {
+    let image = null
+    try {
+      const images = typeof row.images === 'string' ? JSON.parse(row.images) : row.images
+      image = images?.[0]?.url || images?.[0] || null
+    } catch {
+      image = null
+    }
+    return {
+      id: row.cart_item_id,
+      product_id: row.product_id,
+      quantity: row.quantity,
+      name: row.name,
+      price: parseFloat(row.price),
+      image,
+      category: row.category,
+      stock: row.stock,
+      shop_id: row.shop_id,
+      shop_name: row.shop_name,
+      shop_slug: row.shop_slug,
+    }
+  })
 
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
 

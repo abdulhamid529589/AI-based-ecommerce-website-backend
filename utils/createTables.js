@@ -14,6 +14,12 @@ import createAuditLogsTable from '../models/auditLogsTable.js'
 import createPromotionsTable from '../models/promotionsTable.js'
 import createNotificationsTable from '../models/notificationsTable.js'
 import {
+  createShopsTable,
+  createVendorOrdersTable,
+  createVendorPayoutsTable,
+  migrateMultiVendorSchema,
+} from '../models/shopsTable.js'
+import {
   createPagesTable,
   createHomepageSectionsTable,
   createMenuItemsTable,
@@ -44,6 +50,12 @@ export const createTables = async () => {
     await createNotificationsTable()
     // 💬 Promotions & Discounts
     await createPromotionsTable()
+
+    // 🏪 Multi-vendor marketplace
+    await createShopsTable()
+    await createVendorOrdersTable()
+    await createVendorPayoutsTable()
+    await migrateMultiVendorSchema()
 
     // 🎨 Content Management Tables
     await createPagesTable()

@@ -197,11 +197,8 @@ export const securityHeaders = (req, res, next) => {
   // Referrer Policy
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
 
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token')
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  // 🔒 CORS is handled exclusively by the whitelist cors() middleware in app.js.
+  // Never reflect Origin here — that bypasses the allowlist with credentials.
 
   next()
 }
