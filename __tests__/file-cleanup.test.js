@@ -9,12 +9,8 @@ import app from '../app.js'
 import database from '../database/db.js'
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import bcrypt from 'bcrypt'
 import { deleteTempFile, deleteTempFiles, cleanupUploadsDirectory } from '../utils/fileCleanup.js'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 let adminToken
 let customerId
@@ -102,7 +98,7 @@ async function getCustomerToken() {
 }
 
 function createTestImageFile() {
-  const testImagePath = path.join(__dirname, '../test-image.jpg')
+  const testImagePath = path.join(process.cwd(), 'test-image.jpg')
 
   // Create a minimal JPEG for testing
   const jpegHeader = Buffer.from([
@@ -304,6 +300,7 @@ describe('API Endpoints - File Cleanup Integration', () => {
         .field('description', 'Test product description')
         .field('price', '100')
         .field('stock', '10')
+        .field('category', 'Test Category')
         .attach('images', testImagePath)
 
       expect([200, 201]).toContain(response.status)
@@ -333,6 +330,7 @@ describe('API Endpoints - File Cleanup Integration', () => {
         .field('description', 'Product with multiple images')
         .field('price', '200')
         .field('stock', '5')
+        .field('category', 'Test Category')
         .attach('images', testImage1)
         .attach('images', testImage2Path)
 
@@ -361,6 +359,7 @@ describe('API Endpoints - File Cleanup Integration', () => {
         .field('description', 'Product to update')
         .field('price', '150')
         .field('stock', '8')
+        .field('category', 'Test Category')
 
       expect([200, 201]).toContain(createRes.status)
 
@@ -395,14 +394,14 @@ describe('API Endpoints - File Cleanup Integration', () => {
     }, 30000)
   })
 
-  describe('PATCH /api/v1/users/profile - Avatar Upload', () => {
+  describe('POST /api/v1/auth/user/update-avatar - Avatar Upload', () => {
     test('should upload avatar and cleanup temp file', async () => {
       const customerToken = await getCustomerToken()
       const testImagePath = createTestImageFile()
       const filesBefore = countFilesInUploads()
 
       const response = await request(app)
-        .patch('/api/v1/users/profile')
+        .post('/api/v1/auth/user/update-avatar')
         .set('Authorization', `Bearer ${customerToken}`)
         .field('name', 'Test Customer')
         .field('email', 'customer@example.com')

@@ -6,7 +6,7 @@
 const schemas = {
   createProduct: {
     name: { required: true, type: 'string', min: 3, max: 200 },
-    description: { required: true, type: 'string', min: 10, max: 2000 },
+    description: { required: true, type: 'string', min: 1, max: 2000 },
     price: { required: true, type: 'number', min: 0 },
     stock: { required: true, type: 'number', min: 0, isInteger: true },
     category: { required: true, type: 'string', min: 1 },

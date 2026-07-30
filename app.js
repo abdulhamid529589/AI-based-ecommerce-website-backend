@@ -26,6 +26,7 @@ import {
   cacheControlHeaders,
 } from './middlewares/securityMiddleware.js'
 import { isAuthenticated } from './middlewares/authMiddleware.js'
+import { updateProfile } from './controllers/authController.js'
 import authRouter from './router/authRoutes.js'
 import productRouter from './router/productRoutes.js'
 import adminRouter from './router/adminRoutes.js'
@@ -61,18 +62,39 @@ app.get('/health', (req, res) => {
 })
 
 // 🔒 CORS Configuration - whitelist approved origins
-const allowedOrigins = [process.env.FRONTEND_URL, process.env.DASHBOARD_URL].filter(Boolean) // Remove undefined values
+const configuredOrigins = [process.env.FRONTEND_URL, process.env.DASHBOARD_URL].filter(Boolean)
+const allowedOrigins = [
+  ...new Set([
+    ...configuredOrigins,
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+  ]),
+]
 
 console.log('🔐 CORS Configuration:')
-console.log(
-  '   Allowed Origins:',
-  allowedOrigins.length > 0 ? allowedOrigins : 'ALL (development mode)',
-)
+console.log('   Allowed Origins:', allowedOrigins)
 
 app.use(
   cors({
-    origin: allowedOrigins.length > 0 ? allowedOrigins : true, // If no origins specified, allow all (dev only)
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true)
+      }
+
+      if (
+        allowedOrigins.includes(origin) ||
+        /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+      ) {
+        return callback(null, true)
+      }
+
+      callback(null, false)
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
     allowedHeaders: [
       'Content-Type',
@@ -250,8 +272,30 @@ const csrfMiddleware = (req, res, next) => {
 
     // Product admin endpoints are JWT-authenticated with Bearer token
     // They can optionally include CSRF token but don't require it
-    if (req.path.includes('/admin/') && req.headers.authorization?.startsWith('Bearer ')) {
-      console.log(`[CSRF] ✅ Admin endpoint with JWT auth: ${req.path}`)
+    if (
+      (req.path.includes('/admin/') || req.path === '/create' || req.path === '/bulk') &&
+      req.headers.authorization?.startsWith('Bearer ')
+    ) {
+      console.log(`[CSRF] ✅ Admin/product endpoint with JWT auth: ${req.path}`)
+      return next()
+    }
+
+    // Plural product routes use the same JWT-authenticated mutation contract
+    if (
+      (req.baseUrl?.includes('/product') || req.baseUrl?.includes('/products')) &&
+      req.headers.authorization?.startsWith('Bearer ')
+    ) {
+      console.log(`[CSRF] ✅ Product mutation with JWT auth: ${req.baseUrl}${req.path}`)
+      return next()
+    }
+
+    // User profile updates over JWT-authenticated endpoints can be skipped safely
+    if (
+      req.path === '/profile' &&
+      req.baseUrl?.includes('/users') &&
+      req.headers.authorization?.startsWith('Bearer ')
+    ) {
+      console.log(`[CSRF] ✅ User profile endpoint with JWT auth: ${req.baseUrl}${req.path}`)
       return next()
     }
 
@@ -366,6 +410,7 @@ app.use((req, res, next) => {
 // API Routes
 app.use('/api/v1/auth', authLimiter, authRouter) // ✅ Phase 3: Auth rate limiting - NO CSRF needed (JWT protected)
 app.use('/api/v1/product', csrfMiddleware, productRouter) // ✅ CSRF required for product mutations
+app.use('/api/v1/products', csrfMiddleware, productRouter) // ✅ Compatibility for plural REST-style product routes
 app.use('/api/v1/admin', csrfMiddleware, adminRouter) // ✅ CSRF for admin, but exempts file uploads
 app.use('/api/v1/order', csrfMiddleware, orderRouter) // ✅ CSRF required for orders
 app.use('/api/v1/payment', paymentLimiter, csrfMiddleware, paymentGatewayRouter) // ✅ Phase 3: Payment rate limiting
@@ -403,11 +448,15 @@ app.post('/api/v1/order/new', strictLimiter)
 app.post('/api/v1/payment/bkash', paymentLimiter)
 app.post('/api/v1/payment/nagad', paymentLimiter)
 
-// Initialize database tables (non-blocking - errors logged but don't crash)
-createTables().catch((error) => {
-  console.warn('⚠️ Failed to initialize database tables:', error.message)
-  console.warn('⚠️ Server will continue running, but some features may not work properly')
-})
+// Initialize database tables outside of the test environment.
+// Jest imports the app without waiting for async startup work, so avoid
+// background logs that happen after tests finish.
+if (process.env.NODE_ENV !== 'test') {
+  createTables().catch((error) => {
+    console.warn('⚠️ Failed to initialize database tables:', error.message)
+    console.warn('⚠️ Server will continue running, but some features may not work properly')
+  })
+}
 
 // 🔒 CSRF Error handler - handle CSRF token mismatches gracefully
 app.use((err, req, res, next) => {

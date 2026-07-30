@@ -25,6 +25,14 @@ export const errorMiddleware = (err, req, res, next) => {
     err = new ErrorHandler(message, 400)
   }
 
+  if (err.code === '23505') {
+    const detail = err.detail || ''
+    const duplicateFieldMatch = detail.match(/Key \((.*?)\)=\((.*?)\)/)
+    const fieldName = duplicateFieldMatch ? duplicateFieldMatch[1] : 'field'
+    const message = `Duplicate value for ${fieldName}. Please use a unique value.`
+    err = new ErrorHandler(message, 409)
+  }
+
   if (err.name === 'JsonWebTokenError') {
     const message = 'JSON Web Token is invalid, try again'
     err = new ErrorHandler(message, 400)
@@ -55,6 +63,8 @@ export const errorMiddleware = (err, req, res, next) => {
         return 'FORBIDDEN'
       case 404:
         return 'NOT_FOUND'
+      case 409:
+        return 'CONFLICT'
       case 400:
         return 'BAD_REQUEST'
       case 500:

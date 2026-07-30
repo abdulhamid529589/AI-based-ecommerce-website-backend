@@ -50,8 +50,25 @@ router.post(
   validateRequest('createProduct'),
   createProduct,
 )
+router.post(
+  '/create',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  validateRequest('createProduct'),
+  createProduct,
+)
+router.post(
+  '/',
+  isAuthenticated,
+  authorizedRoles('Admin'),
+  validateRequest('createProduct'),
+  createProduct,
+)
+router.post('/bulk', isAuthenticated, authorizedRoles('Admin'), bulkImportProducts)
 router.get('/', fetchAllProducts)
 router.get('/singleProduct/:productId', fetchSingleProduct)
+router.get('/:productId', fetchSingleProduct)
+router.get('/search', searchSuggestions)
 router.put(
   '/post-new/review/:productId',
   isAuthenticated,
@@ -60,7 +77,10 @@ router.put(
 )
 router.delete('/delete/review/:productId', isAuthenticated, deleteReview)
 router.put('/admin/update/:productId', isAuthenticated, authorizedRoles('Admin'), updateProduct)
+router.put('/:productId', isAuthenticated, authorizedRoles('Admin'), updateProduct)
+router.patch('/:productId', isAuthenticated, authorizedRoles('Admin'), updateProduct)
 router.delete('/admin/delete/:productId', isAuthenticated, authorizedRoles('Admin'), deleteProduct)
+router.delete('/:productId', isAuthenticated, authorizedRoles('Admin'), deleteProduct)
 router.post('/ai-search', isAuthenticated, fetchAIFilteredProducts)
 
 // Enhanced product management endpoints

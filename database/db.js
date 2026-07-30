@@ -1,8 +1,11 @@
 import pkg from 'pg'
-const { Pool } = pkg
+const { Pool, types } = pkg
 
 import dotenv from 'dotenv'
 dotenv.config()
+
+// Parse NUMERIC/DECIMAL columns as JavaScript numbers instead of strings
+types.setTypeParser(1700, (value) => (value === null ? null : parseFloat(value)))
 
 // Validate required environment variables
 if (!process.env.DB_PASSWORD) {

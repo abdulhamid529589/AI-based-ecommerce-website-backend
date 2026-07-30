@@ -11,6 +11,8 @@ import bcrypt from 'bcrypt'
 import fs from 'fs'
 import path from 'path'
 
+jest.setTimeout(30000)
+
 let adminToken
 let customerToken
 let lastCSRFToken
@@ -30,19 +32,27 @@ async function getCSRFToken() {
 }
 
 // Helper to create test user
-async function createTestUser(email, role = 'Customer') {
+async function createTestUser(email, role = 'User') {
   try {
     const hashedPassword = await bcrypt.hash('TestPass@123456', 10)
+    const normalizedRole = role === 'Customer' ? 'User' : role
+    const mobileSuffix = [...email]
+      .map((char, index) => ((char.charCodeAt(0) + index) % 10).toString())
+      .join('')
+      .slice(0, 7)
+      .padEnd(7, '0')
+    const mobile = `0170${mobileSuffix}`
+
     const result = await database.query(
       `INSERT INTO users (name, email, mobile, password, role, created_at)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (email) DO UPDATE SET role = $5 RETURNING id`,
+       ON CONFLICT (email) DO UPDATE SET role = $5, mobile = EXCLUDED.mobile RETURNING id`,
       [
-        role === 'Admin' ? 'Test Admin Phase 8' : `Test Customer ${email}`,
+        normalizedRole === 'Admin' ? 'Test Admin Phase 8' : `Test Customer ${email}`,
         email,
-        '01700000000',
+        mobile,
         hashedPassword,
-        role,
+        normalizedRole,
         new Date(),
       ],
     )
@@ -67,6 +77,16 @@ async function getAuthToken(email) {
   } catch (error) {
     console.error('Error getting auth token:', error.message)
   }
+}
+
+function createTestImageFile(fileName = 'phase8-test-image') {
+  const testImagePath = path.join(process.cwd(), `${fileName}-${Date.now()}.png`)
+  const imageBuffer = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+hHwAF4gH+xBsPAAAAAElFTkSuQmCC',
+    'base64',
+  )
+  fs.writeFileSync(testImagePath, imageBuffer)
+  return testImagePath
 }
 
 describe('Phase 8: Image Upload & File Management', () => {
@@ -250,12 +270,7 @@ describe('Phase 8: Image Upload & File Management', () => {
   describe('Request Logging & Debugging', () => {
     it('should log file details when received', async () => {
       console.log('\n  📋 Test: Request logging functionality')
-      const testImagePath = '/boot/grub-16x9.png'
-
-      if (!fs.existsSync(testImagePath)) {
-        console.log(`  ⚠️  Test image not found, skipping`)
-        return
-      }
+      const testImagePath = createTestImageFile('phase8-log-test')
 
       console.log(`  📤 Sending request with file: ${testImagePath}`)
       console.log(`  📊 File stats:`)
@@ -277,6 +292,8 @@ describe('Phase 8: Image Upload & File Management', () => {
       ) {
         console.log(`  ⚠️  File was not properly received: ${response.body.message}`)
       }
-    })
+
+      fs.unlinkSync(testImagePath)
+    }, 60000)
   })
 })

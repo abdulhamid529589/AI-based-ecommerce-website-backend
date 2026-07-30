@@ -43,6 +43,7 @@ import {
   // Categories
   getCategories,
 } from '../controllers/contentController.js'
+import { uploadImage } from '../controllers/settingsController.js'
 import { getCategoriesWithSubcategories_Controller } from '../controllers/subcategoryController.js'
 import { isAuthenticated, authorizedRoles } from '../middlewares/authMiddleware.js'
 
@@ -143,5 +144,8 @@ router.post('/global', isAuthenticated, authorizedRoles('Admin'), updateGlobalSe
 router.get('/categories', getCategories)
 // Categories with subcategories - PUBLIC
 router.get('/categories-with-subcategories', getCategoriesWithSubcategories_Controller)
+
+// Image Upload (Admin-only alias for settings image uploads)
+router.post('/upload', isAuthenticated, authorizedRoles('Admin'), uploadImage)
 
 export default router
