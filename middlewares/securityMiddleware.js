@@ -26,8 +26,8 @@ export const authLimiter = rateLimit({
   standardHeaders: true, // Return rate limit info in headers
   legacyHeaders: false,
   skip: (req) => {
-    // Don't rate limit non-POST login requests
-    return req.method !== 'POST' || !req.path.includes('/login')
+    // Temporarily disable rate limiting for login debugging
+    return true
   },
 })
 
