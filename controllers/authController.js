@@ -89,33 +89,18 @@ export const login = catchAsyncErrors(async (req, res, next) => {
   const { email, mobile, password } = req.body
   const normalizedEmail = email ? String(email).trim().toLowerCase() : null
   const normalizedMobile = mobile ? String(mobile).trim() : null
-  const passwordLength = password ? String(password).length : 0
-  const clientIp = req.ip || req.headers['x-forwarded-for'] || 'unknown'
-
-  console.log('[AUTH LOGIN] Attempt started', {
-    email: normalizedEmail || null,
-    mobile: normalizedMobile || null,
-    passwordLength,
-    ip: clientIp,
-    userAgent: req.get('user-agent')?.slice(0, 200) || 'unknown',
-    path: req.path,
-  })
 
   if (!password) {
-    console.warn('[AUTH LOGIN] Missing password in request')
     return next(new ErrorHandler('Please provide password.', 400))
   }
 
   if (!normalizedEmail && !normalizedMobile) {
-    console.warn('[AUTH LOGIN] Missing email/mobile in request')
     return next(new ErrorHandler('Please provide email or mobile number.', 400))
   }
 
   let user
-  let queryUsed = null
 
   if (normalizedEmail) {
-    queryUsed = 'email'
     user = await database.query(`SELECT * FROM users WHERE email = $1`, [normalizedEmail])
   } else if (normalizedMobile) {
     // Normalize Bangladesh mobile number for login
@@ -133,28 +118,10 @@ export const login = catchAsyncErrors(async (req, res, next) => {
       normalizedMobileValue = '+880' + digitsOnly
     }
 
-    queryUsed = 'mobile'
     user = await database.query(`SELECT * FROM users WHERE mobile = $1`, [normalizedMobileValue])
-    console.log('[AUTH LOGIN] Normalized mobile for lookup', {
-      original: normalizedMobile,
-      normalized: normalizedMobileValue,
-    })
   }
 
-  const rowCount = user?.rows?.length ?? 0
-  console.log('[AUTH LOGIN] User lookup result', {
-    queryUsed,
-    rowCount,
-    userId: user?.rows?.[0]?.id ?? null,
-    role: user?.rows?.[0]?.role ?? null,
-    storedEmail: user?.rows?.[0]?.email ?? null,
-    storedMobile: user?.rows?.[0]?.mobile ?? null,
-    passwordHashPresent: !!user?.rows?.[0]?.password,
-    passwordHashPreview: user?.rows?.[0]?.password ? user.rows[0].password.slice(0, 30) : null,
-  })
-
-  if (rowCount === 0) {
-    console.warn('[AUTH LOGIN] No matching user found for provided credentials')
+  if (user.rows.length === 0) {
     return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
 
@@ -163,49 +130,15 @@ export const login = catchAsyncErrors(async (req, res, next) => {
   const normalizedPassword = typeof password === 'string' ? password.trim() : password
 
   if (!storedHash || typeof storedHash !== 'string' || !storedHash.startsWith('$2')) {
-    console.error('[AUTH LOGIN] Stored password is missing or not bcrypt', {
-      userId: user.rows[0].id,
-      storedHashPreview: storedHash ? storedHash.slice(0, 30) : null,
-    })
     return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
 
-  try {
-    const isPasswordMatch = await bcrypt.compare(normalizedPassword, storedHash)
-    console.log('[AUTH LOGIN] Password comparison result', {
-      userId: user.rows[0].id,
-      role: user.rows[0].role,
-      isPasswordMatch,
-      passwordLength: normalizedPassword ? normalizedPassword.length : 0,
-      storedHashLength: storedHash.length,
-      storedHashPrefix: storedHash.slice(0, 20),
-      passwordTrimmed: normalizedPassword !== password,
-      hashTrimmed: storedHash !== rawStoredHash,
-    })
+  const isPasswordMatch = await bcrypt.compare(normalizedPassword, storedHash)
 
-    if (!isPasswordMatch) {
-      console.warn('[AUTH LOGIN] Password did not match stored hash', {
-        userId: user.rows[0].id,
-        role: user.rows[0].role,
-        normalizedPasswordPreview: normalizedPassword ? normalizedPassword.slice(0, 40) : null,
-        storedHashPreview: storedHash.slice(0, 40),
-      })
-      return next(new ErrorHandler('Invalid email/mobile or password.', 401))
-    }
-  } catch (compareError) {
-    console.error('[AUTH LOGIN] bcrypt.compare threw an error', {
-      userId: user.rows[0].id,
-      error: compareError?.message,
-      stack: compareError?.stack,
-    })
+  if (!isPasswordMatch) {
     return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
 
-  console.log('[AUTH LOGIN] Login success', {
-    userId: user.rows[0].id,
-    role: user.rows[0].role,
-    email: user.rows[0].email,
-  })
   sendToken(user.rows[0], 200, 'Logged In.', res)
 })
 
