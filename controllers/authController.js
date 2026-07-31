@@ -158,7 +158,10 @@ export const login = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Invalid email/mobile or password.', 401))
   }
 
-  const storedHash = user.rows[0].password
+  const rawStoredHash = user.rows[0].password
+  const storedHash = typeof rawStoredHash === 'string' ? rawStoredHash.trim() : rawStoredHash
+  const normalizedPassword = typeof password === 'string' ? password.trim() : password
+
   if (!storedHash || typeof storedHash !== 'string' || !storedHash.startsWith('$2')) {
     console.error('[AUTH LOGIN] Stored password is missing or not bcrypt', {
       userId: user.rows[0].id,
@@ -168,18 +171,24 @@ export const login = catchAsyncErrors(async (req, res, next) => {
   }
 
   try {
-    const isPasswordMatch = await bcrypt.compare(password, storedHash)
+    const isPasswordMatch = await bcrypt.compare(normalizedPassword, storedHash)
     console.log('[AUTH LOGIN] Password comparison result', {
       userId: user.rows[0].id,
       role: user.rows[0].role,
       isPasswordMatch,
-      hashPrefix: storedHash.slice(0, 20),
+      passwordLength: normalizedPassword ? normalizedPassword.length : 0,
+      storedHashLength: storedHash.length,
+      storedHashPrefix: storedHash.slice(0, 20),
+      passwordTrimmed: normalizedPassword !== password,
+      hashTrimmed: storedHash !== rawStoredHash,
     })
 
     if (!isPasswordMatch) {
       console.warn('[AUTH LOGIN] Password did not match stored hash', {
         userId: user.rows[0].id,
         role: user.rows[0].role,
+        normalizedPasswordPreview: normalizedPassword ? normalizedPassword.slice(0, 40) : null,
+        storedHashPreview: storedHash.slice(0, 40),
       })
       return next(new ErrorHandler('Invalid email/mobile or password.', 401))
     }
