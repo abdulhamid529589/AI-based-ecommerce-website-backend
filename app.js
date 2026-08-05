@@ -54,11 +54,7 @@ config({ path: './.env' })
 // Setup health check endpoints (must be before CORS for preflight requests)
 setupHealthCheck(app)
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'OK',
-    timestamp: new Date(),
-    csrfSystem: 'custom-token-generation-v2',
-  })
+  res.status(200).type('text/plain').send('OK')
 })
 
 // 🔒 CORS Configuration - whitelist approved origins
