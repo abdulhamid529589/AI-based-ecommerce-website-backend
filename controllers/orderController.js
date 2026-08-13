@@ -4,6 +4,15 @@ import database from '../database/db.js'
 import { generatePaymentIntent } from '../utils/generatePaymentIntent.js'
 import { validateOrderData } from '../utils/inputValidator.js'
 import { logOrderCreation, logValidationFailure } from '../utils/auditLogger.js'
+import { withTransaction } from '../utils/transactionHelper.js'
+import {
+  createReservations,
+  expireStaleReservationsSafe,
+  commitReservationsForOrder,
+} from '../utils/inventoryReservation.js'
+import { creditEarningsForOrder } from '../utils/vendorWallet.js'
+import { resolvePromoForCart, recordPromoUsage } from '../utils/promoEngine.js'
+import { redeemPoints } from '../utils/loyalty.js'
 
 export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
   try {
@@ -27,6 +36,8 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       phone,
       orderedItems,
       paymentMethod,
+      promoCode,
+      loyaltyPoints,
     } = req.body
 
     // Verify user is authenticated
@@ -175,31 +186,18 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       })
     })
 
-    // Calculate shipping based on settings from database
-    const district = city ? city.toLowerCase().trim() : ''
-    let shipping_price = 0
-
-    // Get shipping settings from database
+    // Zone-based shipping (falls back to settings if zones empty)
+    let shipping_price = 100
     try {
-      const { getSetting } = await import('../models/settingsTable.js')
-      const shippingSettings = await getSetting('shipping_settings')
-
-      if (shippingSettings?.shipping) {
-        // Check free shipping threshold
-        if (
-          shippingSettings.shipping.freeShippingEnabled &&
-          subtotal_price >= shippingSettings.shipping.freeShippingThreshold
-        ) {
-          shipping_price = 0 // Free shipping
-        } else {
-          shipping_price = shippingSettings.shipping.standardShippingCost || 100
-        }
-      } else {
-        // Fallback to hardcoded values if settings not found
-        shipping_price = 100
-      }
+      const { quoteShipping } = await import('../utils/shippingQuote.js')
+      const quote = await quoteShipping({
+        city,
+        subtotal: subtotal_price,
+        carrier: req.body.shippingCarrier || null,
+      })
+      shipping_price = quote.shipping_price
     } catch (err) {
-      console.warn('Could not load shipping settings, using defaults:', err.message)
+      console.warn('Shipping quote failed, using default:', err.message)
       shipping_price = 100
     }
 
@@ -219,15 +217,40 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
     // Calculate tax on SERVER (dynamic tax rate from settings)
     const tax_price = Math.round(subtotal_price * tax_rate)
 
-    // Calculate final total: subtotal + shipping + tax
-    const total_price = Math.round(subtotal_price + shipping_price + tax_price)
+    // Promo + loyalty (server-authoritative — never trust client discount)
+    let discount_amount = 0
+    let promo_code = null
+    let resolvedPromo = null
+    if (promoCode) {
+      resolvedPromo = await resolvePromoForCart(promoCode, lineItems, req.user.id)
+      if (!resolvedPromo.ok) {
+        return next(new ErrorHandler(resolvedPromo.message, 400))
+      }
+      discount_amount = resolvedPromo.discount
+      promo_code = resolvedPromo.code
+    }
 
-    const orderResult = await database.query(
-      `INSERT INTO orders (buyer_id, total_price, tax_price, shipping_price, idempotency_key) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [req.user.id, total_price, tax_price, shipping_price, idempotencyKey],
+    let loyalty_discount = 0
+    let loyalty_points_used = 0
+    const ptsRequested = Math.max(0, Math.floor(Number(loyaltyPoints) || 0))
+    if (ptsRequested > 0) {
+      const { quoteRedeem } = await import('../utils/loyalty.js')
+      const quote = await quoteRedeem(req.user.id, ptsRequested)
+      if (!quote.ok) {
+        return next(new ErrorHandler(quote.message, 400))
+      }
+      loyalty_discount = quote.discountBdt
+      loyalty_points_used = quote.points
+    }
+
+    // Calculate final total: subtotal + shipping + tax − discounts
+    const total_price = Math.max(
+      0,
+      Math.round(subtotal_price + shipping_price + tax_price - discount_amount - loyalty_discount),
     )
 
-    const orderId = orderResult.rows[0].id
+    // Release expired unpaid holds before allocating new stock
+    await expireStaleReservationsSafe()
 
     // 🏪 Split into per-vendor sub-orders (platform items use shop_id = null bucket)
     const byShop = new Map()
@@ -237,109 +260,207 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       byShop.get(key).push(line)
     }
 
-    const shopKeys = [...byShop.keys()]
-    const shippingPerShop = shopKeys.length
-      ? Math.round((shipping_price / shopKeys.length) * 100) / 100
-      : 0
-    const taxPerShop = shopKeys.length
-      ? Math.round((tax_price / shopKeys.length) * 100) / 100
-      : 0
+    let orderId
+    try {
+      orderId = await withTransaction(async (tx) => {
+        // Lock product rows to prevent oversell under concurrency
+        await tx.query(`SELECT id FROM products WHERE id = ANY($1::uuid[]) FOR UPDATE`, [
+          productIds,
+        ])
 
-    const vendorOrderIds = new Map()
+        let orderResult
+        try {
+          orderResult = await tx.query(
+            `INSERT INTO orders (
+               buyer_id, total_price, tax_price, shipping_price, idempotency_key,
+               discount_amount, promo_code, loyalty_discount, loyalty_points_used
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            [
+              req.user.id,
+              total_price,
+              tax_price,
+              shipping_price,
+              idempotencyKey,
+              discount_amount,
+              promo_code,
+              loyalty_discount,
+              loyalty_points_used,
+            ],
+          )
+        } catch (insertErr) {
+          // Concurrent duplicate idempotency key — surface as conflict
+          if (insertErr.code === '23505') {
+            throw new ErrorHandler('Order already processed with this idempotency key', 409)
+          }
+          throw insertErr
+        }
 
-    for (const [key, shopLines] of byShop.entries()) {
-      const shopSubtotal = shopLines.reduce((sum, l) => sum + l.price * l.quantity, 0)
-      const shopId = key === '__platform__' ? null : key
-      const commissionRate = shopLines[0]?.commission_rate ?? 10
-      const commissionAmount =
-        Math.round(((shopSubtotal * commissionRate) / 100) * 100) / 100
-      const vendorEarning = Math.round((shopSubtotal - commissionAmount) * 100) / 100
+        const newOrderId = orderResult.rows[0].id
 
-      if (shopId) {
-        const vo = await database.query(
-          `INSERT INTO vendor_orders (
-             order_id, shop_id, subtotal, shipping_share, tax_share,
-             commission_rate, commission_amount, vendor_earning, status
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Processing')
-           RETURNING id`,
-          [
-            orderId,
-            shopId,
-            shopSubtotal,
-            shippingPerShop,
-            taxPerShop,
-            commissionRate,
-            commissionAmount,
-            vendorEarning,
-          ],
+        if (resolvedPromo?.promo?.id) {
+          await recordPromoUsage(tx, {
+            userId: req.user.id,
+            promoId: resolvedPromo.promo.id,
+            orderId: newOrderId,
+          })
+        }
+
+        if (loyalty_points_used > 0) {
+          const redeemed = await redeemPoints(tx, {
+            userId: req.user.id,
+            orderId: newOrderId,
+            points: loyalty_points_used,
+          })
+          if (!redeemed.ok) {
+            throw new ErrorHandler(redeemed.message || 'Loyalty redeem failed', 400)
+          }
+        }
+
+        const vendorOrderIds = new Map()
+        const shopEntries = [...byShop.entries()]
+        let allocatedShipping = 0
+        let allocatedTax = 0
+
+        for (let i = 0; i < shopEntries.length; i++) {
+          const [key, shopLines] = shopEntries[i]
+          const shopSubtotal = shopLines.reduce((sum, l) => sum + l.price * l.quantity, 0)
+          const shopId = key === '__platform__' ? null : key
+          const commissionRate = shopLines[0]?.commission_rate ?? 10
+          const commissionAmount =
+            Math.round(((shopSubtotal * commissionRate) / 100) * 100) / 100
+          const vendorEarning = Math.round((shopSubtotal - commissionAmount) * 100) / 100
+
+          // Proportional shipping/tax; last bucket absorbs rounding remainder
+          let shippingShare = 0
+          let taxShare = 0
+          if (subtotal_price > 0) {
+            if (i === shopEntries.length - 1) {
+              shippingShare = Math.round((shipping_price - allocatedShipping) * 100) / 100
+              taxShare = Math.round((tax_price - allocatedTax) * 100) / 100
+            } else {
+              shippingShare =
+                Math.round((shipping_price * (shopSubtotal / subtotal_price)) * 100) / 100
+              taxShare = Math.round((tax_price * (shopSubtotal / subtotal_price)) * 100) / 100
+              allocatedShipping += shippingShare
+              allocatedTax += taxShare
+            }
+          }
+
+          if (shopId) {
+            const vo = await tx.query(
+              `INSERT INTO vendor_orders (
+                 order_id, shop_id, subtotal, shipping_share, tax_share,
+                 commission_rate, commission_amount, vendor_earning, status
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Processing')
+               RETURNING id`,
+              [
+                newOrderId,
+                shopId,
+                shopSubtotal,
+                shippingShare,
+                taxShare,
+                commissionRate,
+                commissionAmount,
+                vendorEarning,
+              ],
+            )
+            vendorOrderIds.set(shopId, vo.rows[0].id)
+
+            // Count order now; total_sales only when payment is confirmed
+            await tx.query(
+              `UPDATE shops SET
+                 total_orders = total_orders + 1,
+                 updated_at = CURRENT_TIMESTAMP
+               WHERE id = $1`,
+              [shopId],
+            )
+          }
+
+          for (const line of shopLines) {
+            await tx.query(
+              `INSERT INTO order_items (
+                 order_id, product_id, quantity, price, image, title, shop_id, vendor_order_id
+               ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+              [
+                newOrderId,
+                line.product_id,
+                line.quantity,
+                line.price,
+                line.image,
+                line.title,
+                shopId,
+                shopId ? vendorOrderIds.get(shopId) : null,
+              ],
+            )
+
+            // Conditional stock decrement — fails closed if concurrent oversell
+            const stockResult = await tx.query(
+              `UPDATE products SET stock = stock - $1
+               WHERE id = $2 AND stock >= $1
+               RETURNING id, stock`,
+              [line.quantity, line.product_id],
+            )
+            if (!stockResult.rows[0]) {
+              throw new ErrorHandler(
+                `Insufficient stock for "${line.title}". Please reduce quantity and try again.`,
+                400,
+              )
+            }
+          }
+        }
+
+        await tx.query(
+          `INSERT INTO shipping_info (order_id, full_name, state, city, country, address, pincode, phone)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [newOrderId, full_name, state, city, country, address, pincode, phone],
         )
-        vendorOrderIds.set(shopId, vo.rows[0].id)
 
-        await database.query(
-          `UPDATE shops SET
-             total_orders = total_orders + 1,
-             total_sales = total_sales + $1,
-             updated_at = CURRENT_TIMESTAMP
-           WHERE id = $2`,
-          [shopSubtotal, shopId],
+        await tx.query(
+          `INSERT INTO payments (order_id, payment_type, payment_status, payment_intent_id)
+           VALUES ($1, $2, 'Pending', $3)
+           ON CONFLICT (order_id) DO NOTHING`,
+          [newOrderId, paymentMethod || 'COD', newOrderId],
         )
+
+        // TTL stock hold — unpaid online orders auto-release after expiry
+        await createReservations(tx, newOrderId, lineItems, paymentMethod || 'COD')
+
+        return newOrderId
+      })
+    } catch (txError) {
+      if (txError.statusCode) {
+        return next(txError)
       }
-
-      for (const line of shopLines) {
-        await database.query(
-          `INSERT INTO order_items (
-             order_id, product_id, quantity, price, image, title, shop_id, vendor_order_id
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            orderId,
-            line.product_id,
-            line.quantity,
-            line.price,
-            line.image,
-            line.title,
-            shopId,
-            shopId ? vendorOrderIds.get(shopId) : null,
-          ],
-        )
-
-        // Decrement stock
-        await database.query(
-          `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2`,
-          [line.quantity, line.product_id],
-        )
-      }
+      throw txError
     }
 
-    // Store shipping details in database
+    // Notify shop owners of new vendor sub-orders
     try {
-      await database.query(
-        `
-        INSERT INTO shipping_info (order_id, full_name, state, city, country, address, pincode, phone)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
-        `,
-        [orderId, full_name, state, city, country, address, pincode, phone],
+      const { createNotificationRecord } = await import('./notificationController.js')
+      const owners = await database.query(
+        `SELECT DISTINCT s.owner_id, s.name, vo.id AS vendor_order_id, vo.subtotal
+         FROM vendor_orders vo
+         JOIN shops s ON s.id = vo.shop_id
+         WHERE vo.order_id = $1`,
+        [orderId],
       )
-      console.log('Shipping info saved for order:', orderId)
-    } catch (err) {
-      console.warn('Warning: Could not insert shipping info:', err.message)
-    }
-
-    // Create payment record for tracking
-    try {
-      await database.query(
-        `INSERT INTO payments (order_id, payment_type, payment_status, payment_intent_id)
-         VALUES ($1, $2, $3, $4)`,
-        [orderId, paymentMethod || 'COD', 'Pending', orderId],
-      )
-      console.log('Payment record created for order:', orderId)
-    } catch (err) {
-      console.warn('Warning: Could not create payment record:', err.message)
+      for (const row of owners.rows) {
+        await createNotificationRecord({
+          userId: row.owner_id,
+          type: 'order',
+          title: 'New order received',
+          message: `New order for ${row.name} · ৳${Number(row.subtotal).toLocaleString()}`,
+          data: { orderId, vendorOrderId: row.vendor_order_id },
+          priority: 'high',
+        })
+      }
+    } catch (notifyErr) {
+      console.warn('Vendor order notify skipped:', notifyErr.message)
     }
 
     // For COD, skip online payment gateway and just return success
     if (paymentMethod === 'COD') {
       console.log('COD Order created successfully:', orderId)
-      // 🔒 Log order creation for audit trail
       await logOrderCreation(req.user.id, orderId, total_price, 'COD', 'SUCCESS')
       return res.status(200).json({
         success: true,
@@ -348,10 +469,12 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
         total_price,
         tax_price,
         shipping_price,
+        discount_amount,
+        loyalty_discount,
+        promo_code,
       })
     }
 
-    // 🔒 Log order creation for payment
     await logOrderCreation(req.user.id, orderId, total_price, paymentMethod, 'SUCCESS')
 
     res.status(200).json({
@@ -362,14 +485,19 @@ export const placeNewOrder = catchAsyncErrors(async (req, res, next) => {
       total_price,
       tax_price,
       shipping_price,
+      discount_amount,
+      loyalty_discount,
+      promo_code,
       paymentMethod,
     })
   } catch (error) {
     console.error('Order creation error:', error.message)
     console.error('Full error:', error)
-    // 🔒 Log failed order creation
     if (req.user?.id) {
       await logOrderCreation(req.user.id, 'unknown', 0, 'unknown', 'FAILURE')
+    }
+    if (error.statusCode) {
+      return next(error)
     }
     return next(new ErrorHandler(error.message || 'Failed to create order', 500))
   }
@@ -700,6 +828,12 @@ export const updatePaymentStatus = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Invalid order ID.', 404))
   }
 
+  const previous = await database.query(
+    `SELECT payment_status FROM payments WHERE order_id = $1`,
+    [orderId],
+  )
+  const previousStatus = previous.rows[0]?.payment_status || null
+
   // Try to update existing payment status
   let results = await database.query(
     `UPDATE payments SET payment_status = $1 WHERE order_id = $2 RETURNING *`,
@@ -719,8 +853,46 @@ export const updatePaymentStatus = catchAsyncErrors(async (req, res, next) => {
   // Also update the paid_at timestamp in orders table if payment is marked as Paid
   if (paymentStatus === 'Paid') {
     await database.query(`UPDATE orders SET paid_at = NOW() WHERE id = $1`, [orderId])
+    await commitReservationsForOrder(database, orderId)
+    // Credit vendor sales once when transitioning into Paid
+    if (previousStatus !== 'Paid') {
+      await database.query(
+        `UPDATE shops s
+         SET total_sales = total_sales + vo.subtotal,
+             updated_at = CURRENT_TIMESTAMP
+         FROM vendor_orders vo
+         WHERE vo.order_id = $1 AND vo.shop_id = s.id`,
+        [orderId],
+      )
+      await withTransaction(async (tx) => {
+        await creditEarningsForOrder(tx, orderId, req.user.id)
+        const orderRow = await tx.query(
+          `SELECT buyer_id, total_price FROM orders WHERE id = $1`,
+          [orderId],
+        )
+        if (orderRow.rows[0]) {
+          const { earnPointsForPaidOrder } = await import('../utils/loyalty.js')
+          await earnPointsForPaidOrder(tx, {
+            userId: orderRow.rows[0].buyer_id,
+            orderId,
+            totalPrice: orderRow.rows[0].total_price,
+          })
+        }
+      })
+    }
   } else {
     await database.query(`UPDATE orders SET paid_at = NULL WHERE id = $1`, [orderId])
+    // Reverse sales if admin un-marks a paid order
+    if (previousStatus === 'Paid') {
+      await database.query(
+        `UPDATE shops s
+         SET total_sales = GREATEST(total_sales - vo.subtotal, 0),
+             updated_at = CURRENT_TIMESTAMP
+         FROM vendor_orders vo
+         WHERE vo.order_id = $1 AND vo.shop_id = s.id`,
+        [orderId],
+      )
+    }
   }
 
   res.status(200).json({

@@ -68,21 +68,14 @@ class TransactionHelper {
   }
 
   /**
-   * Execute query within transaction
+   * Execute query within transaction (does not auto-rollback —
+   * withTransaction / caller owns commit/rollback lifecycle)
    */
   async query(queryString, params = []) {
-    try {
-      if (!this.client) {
-        throw new Error('No active transaction')
-      }
-
-      const result = await this.client.query(queryString, params)
-      return result
-    } catch (error) {
-      // Auto-rollback on query error
-      await this.rollback()
-      throw error
+    if (!this.client) {
+      throw new Error('No active transaction')
     }
+    return this.client.query(queryString, params)
   }
 
   /**

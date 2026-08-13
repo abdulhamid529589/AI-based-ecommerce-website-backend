@@ -101,6 +101,8 @@ const normalizeProduct = (product) => {
 export const createProduct = catchAsyncErrors(async (req, res, next) => {
   // Required fields
   let { name, description, price, category, stock } = req.body
+  // Support subcategory from FormData / JSON
+  const subcategoryId = req.body.subcategory_id || req.body.subcategoryId || null
 
   // Optional fields
   const {
@@ -155,6 +157,23 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
   description = sanitizeXSS(description)
   if (category) {
     category = sanitizeXSS(category)
+  }
+
+  let subcategory_id = null
+  let subcategory = null
+  try {
+    const { resolveSubcategoryFields } = await import('../utils/productTaxonomy.js')
+    const resolved = await resolveSubcategoryFields(
+      req.body.subcategory_id || req.body.subcategoryId || null,
+      category,
+    )
+    subcategory_id = resolved.subcategory_id
+    subcategory = resolved.subcategory
+  } catch (taxErr) {
+    if (taxErr.statusCode) {
+      return next(new ErrorHandler(taxErr.message, taxErr.statusCode))
+    }
+    throw taxErr
   }
 
   if (!name || !description || !price || stock === undefined) {
@@ -250,14 +269,14 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
       weight, weight_unit, length, width, height, low_stock_threshold, stock_status,
       allow_backorders, sold_individually, brand, tags, shipping_class, free_shipping,
       meta_title, meta_description, focus_keyword, purchase_note, enable_reviews,
-      featured, visibility, image_alts, menu_order
+      featured, visibility, image_alts, menu_order, subcategory_id, subcategory
     ) VALUES (
       $1, $2, $3, $4, $5, $6, $7,
       $8, $9, $10, $11, $12, $13, $14,
       $15, $16, $17, $18, $19, $20, $21,
       $22, $23, $24, $25, $26, $27,
       $28, $29, $30, $31, $32,
-      $33, $34, $35, $36
+      $33, $34, $35, $36, $37, $38
     )
     RETURNING *
   `
@@ -301,6 +320,8 @@ export const createProduct = catchAsyncErrors(async (req, res, next) => {
     visibility || 'public',
     imageAlts ? JSON.stringify(imageAlts) : null,
     menuOrder || 0,
+    subcategory_id,
+    subcategory,
   ]
 
   const product = await database.query(query, values)
@@ -343,6 +364,9 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
       page,
       limit,
       offset,
+      category,
+      subcategory: req.query.subcategory,
+      search,
       filters: { availability, price, category, ratings, search },
     })
 
@@ -354,11 +378,11 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
 
     // Filter products by availability
     if (availability === 'in-stock') {
-      conditions.push(`stock > 5`)
+      conditions.push(`p.stock > 5`)
     } else if (availability === 'limited') {
-      conditions.push(`stock > 0 AND stock <= 5`)
+      conditions.push(`p.stock > 0 AND p.stock <= 5`)
     } else if (availability === 'out-of-stock') {
-      conditions.push(`stock = 0`)
+      conditions.push(`p.stock = 0`)
     }
 
     // Filter products by price
@@ -371,7 +395,7 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
         if (isNaN(min) || isNaN(max) || min < 0 || max < min) {
           return next(new ErrorHandler('Invalid price range format. Expected: min-max', 400))
         }
-        conditions.push(`price BETWEEN $${index} AND $${index + 1}`)
+        conditions.push(`p.price BETWEEN $${index} AND $${index + 1}`)
         values.push(min, max)
         index += 2
       }
@@ -379,9 +403,35 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
 
     // Filter products by category
     if (category) {
-      conditions.push(`category ILIKE $${index}`)
+      conditions.push(`p.category ILIKE $${index}`)
       values.push(`%${category}%`)
       index++
+    }
+
+    // Filter by subcategory slug, name, or UUID
+    const subcategory = req.query.subcategory
+    const subcategoryId = req.query.subcategory_id || req.query.subcategoryId
+    if (subcategoryId) {
+      conditions.push(`p.subcategory_id = $${index}`)
+      values.push(subcategoryId)
+      index++
+    } else if (subcategory) {
+      const raw = String(subcategory).trim()
+      const asSlug = raw.toLowerCase()
+      conditions.push(
+        `(
+          p.subcategory_id IN (
+            SELECT id FROM subcategories
+            WHERE LOWER(slug) = $${index}
+               OR REPLACE(LOWER(name), ' ', '-') = $${index}
+          )
+          OR REPLACE(LOWER(COALESCE(p.subcategory, '')), ' ', '-') = $${index}
+          OR LOWER(COALESCE(p.subcategory, '')) = $${index + 1}
+          OR p.subcategory ILIKE $${index + 2}
+        )`,
+      )
+      values.push(asSlug, asSlug.replace(/-/g, ' '), `%${raw}%`)
+      index += 3
     }
 
     // Filter products by rating
@@ -390,7 +440,7 @@ export const fetchAllProducts = catchAsyncErrors(async (req, res, next) => {
       if (isNaN(rating) || rating < 0 || rating > 5) {
         return next(new ErrorHandler('Rating must be between 0 and 5', 400))
       }
-      conditions.push(`ratings >= $${index}`)
+      conditions.push(`p.ratings >= $${index}`)
       values.push(rating)
       index++
     }
@@ -614,6 +664,8 @@ export const updateProduct = catchAsyncErrors(async (req, res, next) => {
     visibility: 'visibility',
     image_alts: 'image_alts',
     menu_order: 'menu_order',
+    subcategory_id: 'subcategory_id',
+    subcategory: 'subcategory',
   }
 
   // Dynamically add fields to update

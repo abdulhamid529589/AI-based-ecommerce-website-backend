@@ -6,6 +6,7 @@ import { initializeSentry } from './utils/sentryIntegration.js'
 import { initializeIdempotencyCleanup } from './utils/idempotencyKey.js'
 import { createPerformanceIndexes } from './utils/performanceOptimizations.js'
 import { initializeSocket } from './socket/socketSetup.js'
+import { startReservationCleanupJob } from './utils/inventoryReservation.js'
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLIENT_NAME,
@@ -46,6 +47,9 @@ await createPerformanceIndexes()
 
 // Initialize idempotency cleanup routine
 initializeIdempotencyCleanup()
+
+// Expire unpaid stock holds (online: ~30m, COD: ~7d)
+startReservationCleanupJob()
 
 // Create HTTP server for Socket.io support
 const httpServer = http.createServer(app)

@@ -18,7 +18,9 @@ import {
   createVendorOrdersTable,
   createVendorPayoutsTable,
   migrateMultiVendorSchema,
+  migratePhase1ASchema,
 } from '../models/shopsTable.js'
+import { migrateMarketplaceOpsSchema } from '../models/marketplaceOpsTables.js'
 import {
   createPagesTable,
   createHomepageSectionsTable,
@@ -56,6 +58,8 @@ export const createTables = async () => {
     await createVendorOrdersTable()
     await createVendorPayoutsTable()
     await migrateMultiVendorSchema()
+    await migratePhase1ASchema()
+    await migrateMarketplaceOpsSchema()
 
     // 🎨 Content Management Tables
     await createPagesTable()

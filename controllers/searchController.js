@@ -7,7 +7,7 @@ import database from '../database/db.js'
  * Combines text search, category filtering, and recommendation engine
  */
 export const aiSearch = catchAsyncErrors(async (req, res, next) => {
-  const { query, category, filters = {}, limit = 20, page = 1 } = req.body
+  const { query, category, filters = {}, limit = 20, page = 1, shopId } = req.body
 
   if (!query || query.trim().length < 2) {
     return next(new ErrorHandler('Search query must be at least 2 characters', 400))
@@ -15,15 +15,25 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
 
   const offset = (page - 1) * limit
 
-  // Build dynamic WHERE clause
-  let whereConditions = ['(p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1)']
+  // Build dynamic WHERE clause — include shop name for multivendor discovery
+  let whereConditions = [
+    `(p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1 OR s.name ILIKE $1)`,
+  ]
   let queryParams = [`%${query}%`]
   let paramIndex = 2
+
+  whereConditions.push(`(s.status IS NULL OR s.status = 'approved' OR p.shop_id IS NULL)`)
 
   // Add category filter
   if (category) {
     whereConditions.push(`p.category = $${paramIndex}`)
     queryParams.push(category)
+    paramIndex++
+  }
+
+  if (shopId || filters.shopId) {
+    whereConditions.push(`p.shop_id = $${paramIndex}`)
+    queryParams.push(shopId || filters.shopId)
     paramIndex++
   }
 
@@ -54,7 +64,11 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
   const whereClause = whereConditions.join(' AND ')
 
   // Get total count
-  const countQuery = `SELECT COUNT(*) as total FROM products p WHERE ${whereClause}`
+  const countQuery = `
+    SELECT COUNT(*) as total
+    FROM products p
+    LEFT JOIN shops s ON s.id = p.shop_id
+    WHERE ${whereClause}`
   const countResult = await database.query(countQuery, queryParams)
   const total = parseInt(countResult.rows[0].total)
 
@@ -70,6 +84,10 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
       p.stock,
       p.images,
       p.created_at,
+      p.shop_id,
+      s.name AS shop_name,
+      s.slug AS shop_slug,
+      s.is_verified AS shop_verified,
       (
         SELECT COUNT(*) FROM order_items oi
         WHERE oi.product_id = p.id
@@ -79,6 +97,7 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
         WHERE pr.product_id = p.id
       ) as avg_review_rating
     FROM products p
+    LEFT JOIN shops s ON s.id = p.shop_id
     WHERE ${whereClause}
     ORDER BY
       p.ratings DESC,
@@ -99,16 +118,31 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
   `
   const suggestionsResult = await database.query(suggestionsQuery, [`%${query}%`])
 
-  // Get related categories
+  // Facets: categories + shops
   const categoriesQuery = `
-    SELECT DISTINCT category, COUNT(*) as count
-    FROM products
-    WHERE name ILIKE $1
-    GROUP BY category
+    SELECT DISTINCT p.category, COUNT(*) as count
+    FROM products p
+    LEFT JOIN shops s ON s.id = p.shop_id
+    WHERE ${whereClause}
+    GROUP BY p.category
     ORDER BY count DESC
-    LIMIT 5
+    LIMIT 8
   `
-  const categoriesResult = await database.query(categoriesQuery, [`%${query}%`])
+  const categoriesResult = await database.query(
+    categoriesQuery,
+    queryParams.slice(0, queryParams.length - 2),
+  )
+
+  const shopsFacetQuery = `
+    SELECT s.id, s.name, s.slug, COUNT(*)::INT as count
+    FROM products p
+    JOIN shops s ON s.id = p.shop_id AND s.status = 'approved'
+    WHERE (p.name ILIKE $1 OR p.description ILIKE $1 OR s.name ILIKE $1)
+    GROUP BY s.id, s.name, s.slug
+    ORDER BY count DESC
+    LIMIT 8
+  `
+  const shopsFacet = await database.query(shopsFacetQuery, [`%${query}%`])
 
   res.status(200).json({
     success: true,
@@ -120,6 +154,7 @@ export const aiSearch = catchAsyncErrors(async (req, res, next) => {
         name: r.category,
         count: parseInt(r.count),
       })),
+      relatedShops: shopsFacet.rows,
       filters: filters,
       pagination: {
         page: parseInt(page),

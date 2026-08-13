@@ -3,6 +3,10 @@ import { catchAsyncErrors } from '../middlewares/catchAsyncError.js'
 import database from '../database/db.js'
 import axios from 'axios'
 import crypto from 'crypto'
+import { withTransaction } from '../utils/transactionHelper.js'
+import { commitReservationsForOrder } from '../utils/inventoryReservation.js'
+import { creditEarningsForOrder } from '../utils/vendorWallet.js'
+import { earnPointsForPaidOrder } from '../utils/loyalty.js'
 
 /**
  * Load order owned by the authenticated buyer (Admin may access any).
@@ -45,22 +49,48 @@ async function upsertPaymentIntent(orderId, paymentType, paymentIntentId) {
 }
 
 async function markPaymentPaid(orderId, paymentIntentId = null) {
-  await database.query(
-    `UPDATE payments SET payment_status = 'Paid'
-     WHERE order_id = $1`,
-    [orderId],
-  )
-  if (paymentIntentId) {
-    await database.query(
-      `UPDATE payments SET payment_intent_id = COALESCE($2, payment_intent_id)
-       WHERE order_id = $1`,
+  await withTransaction(async (tx) => {
+    // Idempotent: only transition → Paid once, then credit shop sales + commit holds
+    const paid = await tx.query(
+      `UPDATE payments SET
+         payment_status = 'Paid',
+         payment_intent_id = COALESCE($2, payment_intent_id)
+       WHERE order_id = $1 AND payment_status IS DISTINCT FROM 'Paid'
+       RETURNING order_id`,
       [orderId, paymentIntentId],
     )
-  }
-  await database.query(
-    `UPDATE orders SET paid_at = COALESCE(paid_at, CURRENT_TIMESTAMP) WHERE id = $1`,
-    [orderId],
-  )
+
+    await tx.query(
+      `UPDATE orders SET paid_at = COALESCE(paid_at, CURRENT_TIMESTAMP) WHERE id = $1`,
+      [orderId],
+    )
+
+    await commitReservationsForOrder(tx, orderId)
+
+    if (paid.rows[0]) {
+      await tx.query(
+        `UPDATE shops s
+         SET total_sales = total_sales + vo.subtotal,
+             updated_at = CURRENT_TIMESTAMP
+         FROM vendor_orders vo
+         WHERE vo.order_id = $1 AND vo.shop_id = s.id`,
+        [orderId],
+      )
+      await creditEarningsForOrder(tx, orderId, null)
+
+      const orderRow = await tx.query(
+        `SELECT buyer_id, total_price FROM orders WHERE id = $1`,
+        [orderId],
+      )
+      if (orderRow.rows[0]) {
+        await earnPointsForPaidOrder(tx, {
+          userId: orderRow.rows[0].buyer_id,
+          orderId,
+          totalPrice: orderRow.rows[0].total_price,
+        })
+      }
+    }
+  })
 }
 
 async function markPaymentFailed(orderId) {

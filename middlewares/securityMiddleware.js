@@ -26,7 +26,16 @@ export const authLimiter = rateLimit({
   standardHeaders: true, // Return rate limit info in headers
   legacyHeaders: false,
   skip: (req) => {
-    return req.method !== 'POST' || !req.path.includes('/login')
+    // Limit login, register, and password-reset POSTs (mounted under /auth or /vendor)
+    if (req.method !== 'POST') return true
+    const p = (req.path || '').toLowerCase()
+    const sensitive =
+      p.includes('/login') ||
+      p.includes('/register') ||
+      p.includes('/forgot') ||
+      p.includes('/reset') ||
+      p.includes('/otp')
+    return !sensitive
   },
 })
 

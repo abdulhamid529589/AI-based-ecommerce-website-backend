@@ -5,7 +5,6 @@ import cookieParser from 'cookie-parser'
 import fileUpload from 'express-fileupload'
 import crypto from 'crypto'
 import helmet from 'helmet'
-import rateLimit from 'express-rate-limit'
 import compression from 'compression'
 import { createTables } from './utils/createTables.js'
 import { setupHealthCheck } from './utils/healthCheck.js'
@@ -45,6 +44,7 @@ import reviewRouter from './routes/reviewRoutes.js'
 import advancedReviewRouter from './routes/advancedReviewRoutes.js'
 import chatRouter from './routes/chatRoutes.js'
 import vendorRouter from './router/vendorRoutes.js'
+import shippingRouter from './router/shippingRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -364,19 +364,8 @@ const adminCsrfMiddleware = (req, res, next) => {
   return csrfMiddleware(req, res, next)
 }
 
-// 🔒 Strict rate limiting for critical operations
-const strictLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 5, // 5 requests per minute
-  message: 'Too many order attempts, please wait before trying again',
-  skip: (req) => req.user?.role === 'Admin', // Exempt admins
-})
-
-const paymentLimiter_legacy = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 3, // 3 payment attempts per minute
-  message: 'Too many payment attempts, please try again later',
-})
+// 🔒 Strict rate limiting for critical operations (applied on routes — see orderRoutes / payment)
+// NOTE: Do not register app.post('/api/v1/order/new', limiter) AFTER routers — Express never reaches it.
 
 // Apply rate limiting to all API routes
 app.use('/api/v1', rateLimitMiddleware)
@@ -436,13 +425,11 @@ app.use('/api/v1/chat', csrfMiddleware, chatRouter)
 // 🏪 Multi-vendor marketplace (JWT-authenticated mutations; CSRF optional with Bearer)
 app.use('/api/v1/vendor', csrfMiddleware, vendorRouter)
 
+// 🚚 Shipping zones / quotes
+app.use('/api/v1/shipping', csrfMiddleware, shippingRouter)
+
 // ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
 app.use('/api/v1', apiLimiter)
-
-// Apply strict rate limiting to critical endpoints
-app.post('/api/v1/order/new', strictLimiter)
-app.post('/api/v1/payment/bkash', paymentLimiter)
-app.post('/api/v1/payment/nagad', paymentLimiter)
 
 // Initialize database tables outside of the test environment.
 // Jest imports the app without waiting for async startup work, so avoid

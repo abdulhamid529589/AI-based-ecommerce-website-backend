@@ -98,6 +98,7 @@ export const createPromotion = catchAsyncErrors(async (req, res, next) => {
     expiryDate,
     description,
     isActive = true,
+    shop_id = null,
   } = req.body
 
   // Validation
@@ -123,9 +124,21 @@ export const createPromotion = catchAsyncErrors(async (req, res, next) => {
     return next(new ErrorHandler('Promotion code already exists', 400))
   }
 
+  let shopId = shop_id || null
+  if (req.shop?.id) {
+    shopId = req.shop.id
+  }
+  if (shopId) {
+    const shop = await database.query(`SELECT id FROM shops WHERE id = $1`, [shopId])
+    if (!shop.rows[0]) return next(new ErrorHandler('Shop not found for promo', 404))
+  }
+
   const query = `
-    INSERT INTO promotions (code, type, value, min_order_value, max_uses, expiry_date, description, is_active, created_by)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    INSERT INTO promotions (
+      code, type, value, min_order_value, max_uses, expiry_date, description,
+      is_active, created_by, shop_id, discount_percent, discount_amount, expires_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     RETURNING *
   `
 
@@ -139,6 +152,10 @@ export const createPromotion = catchAsyncErrors(async (req, res, next) => {
     description,
     isActive,
     req.user.id,
+    shopId,
+    type === 'percentage' ? value : null,
+    type === 'fixed' ? value : null,
+    expiryDate || null,
   ])
 
   res.status(201).json({
@@ -413,6 +430,27 @@ export const getPromotionAnalytics = catchAsyncErrors(async (req, res, next) => 
   })
 })
 
+/** Vendor: list own shop promotions */
+export const listShopPromotions = catchAsyncErrors(async (req, res, next) => {
+  if (!req.shop) return next(new ErrorHandler('Shop required', 400))
+  const result = await database.query(
+    `SELECT * FROM promotions WHERE shop_id = $1 ORDER BY created_at DESC`,
+    [req.shop.id],
+  )
+  res.status(200).json({ success: true, promotions: result.rows })
+})
+
+/** Vendor: delete own shop promotion */
+export const deleteShopPromotion = catchAsyncErrors(async (req, res, next) => {
+  if (!req.shop) return next(new ErrorHandler('Shop required', 400))
+  const result = await database.query(
+    `DELETE FROM promotions WHERE id = $1 AND shop_id = $2 RETURNING id`,
+    [req.params.promotionId, req.shop.id],
+  )
+  if (!result.rows[0]) return next(new ErrorHandler('Promotion not found', 404))
+  res.status(200).json({ success: true, message: 'Promotion deleted' })
+})
+
 export default {
   getPromotions,
   getPromotion,
@@ -422,4 +460,6 @@ export default {
   validatePromotionCode,
   applyPromotion,
   getPromotionAnalytics,
+  listShopPromotions,
+  deleteShopPromotion,
 }

@@ -61,6 +61,28 @@ export async function createProductsTable() {
     for (const indexQuery of indexQueries) {
       await database.query(indexQuery)
     }
+
+    // Subcategory support (category name kept for display/filter; id for integrity)
+    await database.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'products' AND column_name = 'subcategory_id'
+        ) THEN
+          ALTER TABLE products ADD COLUMN subcategory_id UUID;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'products' AND column_name = 'subcategory'
+        ) THEN
+          ALTER TABLE products ADD COLUMN subcategory VARCHAR(120);
+        END IF;
+      END $$;
+    `)
+    await database.query(
+      `CREATE INDEX IF NOT EXISTS idx_products_subcategory_id ON products(subcategory_id);`,
+    )
   } catch (error) {
     console.error('❌ Failed To Create Products Table.', error)
     // Continue without exiting - database may be unavailable
