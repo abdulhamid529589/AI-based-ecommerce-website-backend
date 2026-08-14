@@ -198,15 +198,26 @@ export const refreshAccessToken = catchAsyncErrors(async (req, res, next) => {
       },
     )
 
+    const isProduction = process.env.NODE_ENV === 'production'
+    const cookieSameSite = process.env.COOKIE_SAME_SITE || (isProduction ? 'None' : 'Lax')
+
     res
       .status(200)
       .cookie('token', accessToken, {
-        expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+        expires: new Date(Date.now() + 15 * 60 * 1000),
         httpOnly: true,
+        sameSite: cookieSameSite,
+        secure: isProduction || cookieSameSite === 'None',
+        domain: process.env.COOKIE_DOMAIN || undefined,
+        path: '/',
       })
       .cookie('accessToken', accessToken, {
-        expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+        expires: new Date(Date.now() + 15 * 60 * 1000),
         httpOnly: true,
+        sameSite: cookieSameSite,
+        secure: isProduction || cookieSameSite === 'None',
+        domain: process.env.COOKIE_DOMAIN || undefined,
+        path: '/',
       })
       .json({
         success: true,
@@ -288,7 +299,6 @@ export const resetPassword = catchAsyncErrors(async (req, res, next) => {
 
 export const updatePassword = catchAsyncErrors(async (req, res, next) => {
   const { currentPassword, newPassword, confirmNewPassword } = req.body
-  console.log(currentPassword, newPassword, confirmNewPassword)
   if (!currentPassword || !newPassword || !confirmNewPassword) {
     return next(new ErrorHandler('Please provide all required fields.', 400))
   }
@@ -318,9 +328,17 @@ export const updatePassword = catchAsyncErrors(async (req, res, next) => {
 })
 
 export const updateProfile = catchAsyncErrors(async (req, res, next) => {
-  const { name, email } = req.body
+  const name = (req.body.name ?? req.user.name ?? '').toString()
+  const email = (req.body.email ?? req.user.email ?? '').toString()
+  const mobile =
+    req.body.mobile !== undefined
+      ? req.body.mobile
+      : req.body.phone !== undefined
+        ? req.body.phone
+        : req.user.mobile
+
   if (!name || !email) {
-    return next(new ErrorHandler('Please provide all required fields.', 400))
+    return next(new ErrorHandler('Please provide name and email.', 400))
   }
   if (name.trim().length === 0 || email.trim().length === 0) {
     return next(new ErrorHandler('Name and email cannot be empty.', 400))
@@ -349,20 +367,23 @@ export const updateProfile = catchAsyncErrors(async (req, res, next) => {
   let user
   if (Object.keys(avatarData).length === 0) {
     user = await database.query(
-      'UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING *',
-      [name, email, req.user.id],
+      'UPDATE users SET name = $1, email = $2, mobile = $3 WHERE id = $4 RETURNING *',
+      [name.trim(), email.trim(), mobile || null, req.user.id],
     )
   } else {
     user = await database.query(
-      'UPDATE users SET name = $1, email = $2, avatar = $3 WHERE id = $4 RETURNING *',
-      [name, email, avatarData, req.user.id],
+      'UPDATE users SET name = $1, email = $2, mobile = $3, avatar = $4 WHERE id = $5 RETURNING *',
+      [name.trim(), email.trim(), mobile || null, avatarData, req.user.id],
     )
   }
 
+  const safeUser = sanitizeUser(user.rows[0])
   res.status(200).json({
     success: true,
     message: 'Profile updated successfully.',
-    user: user.rows[0],
+    user: safeUser,
+    // Back-compat for older clients
+    avatarUrl: safeUser?.avatar?.url || null,
   })
 })
 export const updateNotificationPreferences = catchAsyncErrors(async (req, res, next) => {

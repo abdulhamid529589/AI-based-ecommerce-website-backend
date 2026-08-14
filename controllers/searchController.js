@@ -236,36 +236,11 @@ export const getSearchSuggestions = catchAsyncErrors(async (req, res, next) => {
  * Based on: browsing history, purchases, category preferences, ratings
  */
 export const getPersonalizedRecommendations = catchAsyncErrors(async (req, res, next) => {
-  const { userId, context = 'browsing', limit = 12 } = req.body
+  const userId = req.user?.id
+  const { context = 'browsing', limit = 12 } = req.body
 
   if (!userId) {
-    // Return popular products if no user
-    const query = `
-      SELECT
-        p.id,
-        p.name,
-        p.price,
-        p.category,
-        p.ratings,
-        p.images,
-        COUNT(oi.id) as purchase_count
-      FROM products p
-      LEFT JOIN order_items oi ON p.id = oi.product_id
-      GROUP BY p.id, p.name, p.price, p.category, p.ratings, p.images
-      ORDER BY purchase_count DESC, p.ratings DESC
-      LIMIT $1
-    `
-    const result = await database.query(query, [limit])
-
-    return res.status(200).json({
-      success: true,
-      message: 'Recommendations fetched',
-      data: {
-        recommendations: result.rows,
-        reasons: ['Trending products', 'Top rated products'],
-        context: 'anonymous',
-      },
-    })
+    return next(new ErrorHandler('Authentication required', 401))
   }
 
   // Get user's purchase history and preferences

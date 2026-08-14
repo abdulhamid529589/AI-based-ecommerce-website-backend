@@ -106,7 +106,7 @@ router.get('/search/suggestions', searchSuggestions)
 router.get('/search/trending', trendingProducts)
 
 // Review helpful endpoint
-router.post('/review/helpful/:reviewId', markReviewHelpful)
+router.post('/review/helpful/:reviewId', isAuthenticated, markReviewHelpful)
 
 // Wishlist endpoints
 router.get('/wishlist', isAuthenticated, getWishlist)

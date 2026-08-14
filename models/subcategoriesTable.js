@@ -153,16 +153,52 @@ export const getCategoriesWithSubcategories = async () => {
       return []
     }
 
-    // For each category, fetch its subcategories from the database
+    // For each category, prefer SQL subcategories; fall back to JSON-embedded names
     const categoriesWithSubs = await Promise.all(
       categories.map(async (category) => {
-        const { rows: subcategories } = await database.query(
-          `SELECT id, name, slug, description, icon, image_url, position, is_active
-           FROM subcategories
-           WHERE category_id = $1 AND is_active = true
-           ORDER BY position ASC, created_at DESC`,
-          [category.id],
-        )
+        const categoryKey = category.id || category.slug || category.name
+        let subcategories = []
+
+        if (category.id) {
+          const { rows } = await database.query(
+            `SELECT id, name, slug, description, icon, image_url, position, is_active
+             FROM subcategories
+             WHERE category_id = $1 AND is_active = true
+             ORDER BY position ASC, created_at DESC`,
+            [category.id],
+          )
+          subcategories = rows || []
+        }
+
+        if (!subcategories.length && Array.isArray(category.subcategories)) {
+          subcategories = category.subcategories
+            .map((sub, index) => {
+              if (typeof sub === 'string') {
+                return {
+                  id: `json-${categoryKey}-${index}`,
+                  name: sub,
+                  slug: String(sub)
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '-'),
+                  position: index,
+                  is_active: true,
+                }
+              }
+              return {
+                id: sub.id || `json-${categoryKey}-${index}`,
+                name: sub.name || '',
+                slug:
+                  sub.slug ||
+                  String(sub.name || '')
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, '-'),
+                description: sub.description || '',
+                position: sub.position ?? index,
+                is_active: sub.is_active !== false,
+              }
+            })
+            .filter((s) => s.name)
+        }
 
         return {
           id: category.id,
@@ -172,7 +208,7 @@ export const getCategoriesWithSubcategories = async () => {
           image: category.image || '',
           isVisible: category.isVisible !== undefined ? category.isVisible : true,
           order: category.order || 0,
-          subcategories: subcategories || [],
+          subcategories,
         }
       }),
     )

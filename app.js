@@ -6,6 +6,7 @@ import fileUpload from 'express-fileupload'
 import crypto from 'crypto'
 import helmet from 'helmet'
 import compression from 'compression'
+import { verifyBearerToken } from './utils/verifyAccessToken.js'
 import { createTables } from './utils/createTables.js'
 import { setupHealthCheck } from './utils/healthCheck.js'
 import { errorMiddleware } from './middlewares/errorMiddleware.js'
@@ -17,14 +18,12 @@ import {
 import {
   authLimiter,
   paymentLimiter,
-  apiLimiter,
   sanitizeInput,
   requestSizeLimit,
   securityHeaders,
   suspiciousActivityLogger,
   cacheControlHeaders,
 } from './middlewares/securityMiddleware.js'
-import { isAuthenticated } from './middlewares/authMiddleware.js'
 import { updateProfile } from './controllers/authController.js'
 import authRouter from './router/authRoutes.js'
 import productRouter from './router/productRoutes.js'
@@ -45,6 +44,7 @@ import advancedReviewRouter from './routes/advancedReviewRoutes.js'
 import chatRouter from './routes/chatRoutes.js'
 import vendorRouter from './router/vendorRoutes.js'
 import shippingRouter from './router/shippingRoutes.js'
+import monitoringRouter from './router/monitoringRoutes.js'
 import database from './database/db.js'
 
 const app = express()
@@ -206,40 +206,26 @@ const validateCSRFToken = (token) => {
   return true
 }
 
-// Endpoint to get CSRF token (public, no auth required)
+// CSRF token endpoint (public)
 app.get('/api/v1/csrf-token', (req, res) => {
   const token = generateCSRFToken()
-  console.log('🔐 Generated CSRF token for client')
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('🔐 Generated CSRF token for client')
+  }
   res.json({ csrfToken: token, success: true })
 })
 
-// DEBUG: Endpoint to check current user's token role (development only)
-if (process.env.NODE_ENV !== 'production') {
-  app.get('/api/v1/debug/token-role', isAuthenticated, (req, res) => {
-    const token = req.headers.authorization?.replace('Bearer ', '')
-    let tokenRole = 'unknown'
-    if (token) {
-      try {
-        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString())
-        tokenRole = payload.role
-      } catch (e) {
-        tokenRole = 'decode-error'
-      }
-    }
-    res.json({
-      dbRole: req.user?.role,
-      tokenRole: tokenRole,
-      userId: req.user?.id,
-      userName: req.user?.name,
-      match: req.user?.role === tokenRole,
-    })
-  })
+// CSRF validation middleware
+const jwtCsrfExempt = (req) => {
+  if (!req.headers.authorization?.startsWith('Bearer ')) {
+    return false
+  }
+  return !!verifyBearerToken(req.headers.authorization)
 }
 
-// CSRF validation middleware
 const csrfMiddleware = (req, res, next) => {
   // Only validate CSRF for state-changing requests
-  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
     console.log(`[CSRF] ${req.method} ${req.path} - Checking if exempt...`)
 
     // File uploads are JWT-authenticated, don't need CSRF
@@ -270,7 +256,7 @@ const csrfMiddleware = (req, res, next) => {
     // They can optionally include CSRF token but don't require it
     if (
       (req.path.includes('/admin/') || req.path === '/create' || req.path === '/bulk') &&
-      req.headers.authorization?.startsWith('Bearer ')
+      jwtCsrfExempt(req)
     ) {
       console.log(`[CSRF] ✅ Admin/product endpoint with JWT auth: ${req.path}`)
       return next()
@@ -279,7 +265,7 @@ const csrfMiddleware = (req, res, next) => {
     // Plural product routes use the same JWT-authenticated mutation contract
     if (
       (req.baseUrl?.includes('/product') || req.baseUrl?.includes('/products')) &&
-      req.headers.authorization?.startsWith('Bearer ')
+      jwtCsrfExempt(req)
     ) {
       console.log(`[CSRF] ✅ Product mutation with JWT auth: ${req.baseUrl}${req.path}`)
       return next()
@@ -289,14 +275,14 @@ const csrfMiddleware = (req, res, next) => {
     if (
       req.path === '/profile' &&
       req.baseUrl?.includes('/users') &&
-      req.headers.authorization?.startsWith('Bearer ')
+      jwtCsrfExempt(req)
     ) {
       console.log(`[CSRF] ✅ User profile endpoint with JWT auth: ${req.baseUrl}${req.path}`)
       return next()
     }
 
     // Chat endpoints are JWT-authenticated, don't need CSRF
-    if (req.path.startsWith('/chat/') && req.headers.authorization?.startsWith('Bearer ')) {
+    if (req.path.startsWith('/chat/') && jwtCsrfExempt(req)) {
       console.log(`[CSRF] ✅ Exempting chat endpoint with JWT auth: ${req.path}`)
       return next()
     }
@@ -305,7 +291,7 @@ const csrfMiddleware = (req, res, next) => {
     if (
       (req.path.startsWith('/me/') || req.path.startsWith('/admin/')) &&
       req.baseUrl?.includes('/vendor') &&
-      req.headers.authorization?.startsWith('Bearer ')
+      jwtCsrfExempt(req)
     ) {
       console.log(`[CSRF] ✅ Vendor endpoint with JWT auth: ${req.baseUrl}${req.path}`)
       return next()
@@ -428,8 +414,8 @@ app.use('/api/v1/vendor', csrfMiddleware, vendorRouter)
 // 🚚 Shipping zones / quotes
 app.use('/api/v1/shipping', csrfMiddleware, shippingRouter)
 
-// ✅ Phase 3: General API rate limiting (applies to all /api/v1 routes)
-app.use('/api/v1', apiLimiter)
+// 📊 Monitoring stubs (Admin metrics / client beacons)
+app.use('/api/v1/monitoring', csrfMiddleware, monitoringRouter)
 
 // Initialize database tables outside of the test environment.
 // Jest imports the app without waiting for async startup work, so avoid

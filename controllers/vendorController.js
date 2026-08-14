@@ -6,6 +6,7 @@ import { sendToken } from '../utils/jwtToken.js'
 import { slugify } from '../utils/slugify.js'
 import { v2 as cloudinary } from 'cloudinary'
 import { deleteTempFiles } from '../utils/fileCleanup.js'
+import { validateImageUpload } from '../utils/imageUploadValidation.js'
 import { withTransaction } from '../utils/transactionHelper.js'
 import { creditVendorOrderEarning } from '../utils/vendorWallet.js'
 
@@ -201,6 +202,8 @@ export const updateMyShop = catchAsyncErrors(async (req, res, next) => {
   // Optional logo upload
   if (req.files?.logo) {
     const file = Array.isArray(req.files.logo) ? req.files.logo[0] : req.files.logo
+    const uploadError = validateImageUpload(file)
+    if (uploadError) return next(new ErrorHandler(uploadError, 400))
     const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
       folder: 'Ecommerce_Shop_Logos',
       width: 400,
@@ -214,6 +217,8 @@ export const updateMyShop = catchAsyncErrors(async (req, res, next) => {
 
   if (req.files?.banner) {
     const file = Array.isArray(req.files.banner) ? req.files.banner[0] : req.files.banner
+    const uploadError = validateImageUpload(file)
+    if (uploadError) return next(new ErrorHandler(uploadError, 400))
     const uploaded = await cloudinary.uploader.upload(file.tempFilePath, {
       folder: 'Ecommerce_Shop_Banners',
       width: 1600,
@@ -323,6 +328,10 @@ export const createVendorProduct = catchAsyncErrors(async (req, res, next) => {
   if (req.files?.images) {
     const images = Array.isArray(req.files.images) ? req.files.images : [req.files.images]
     for (const image of images.slice(0, 8)) {
+      const uploadError = validateImageUpload(image)
+      if (uploadError) {
+        return next(new ErrorHandler(uploadError, 400))
+      }
       const result = await cloudinary.uploader.upload(image.tempFilePath, {
         folder: 'Ecommerce_Product_Images',
         width: 1000,
@@ -434,6 +443,10 @@ export const updateVendorProduct = catchAsyncErrors(async (req, res, next) => {
     const uploaded = []
     const temps = []
     for (const image of images.slice(0, 8)) {
+      const uploadError = validateImageUpload(image)
+      if (uploadError) {
+        return next(new ErrorHandler(uploadError, 400))
+      }
       const up = await cloudinary.uploader.upload(image.tempFilePath, {
         folder: 'Ecommerce_Product_Images',
         width: 1000,

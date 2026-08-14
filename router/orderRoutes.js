@@ -27,11 +27,6 @@ import {
 
 const router = express.Router()
 
-// DEBUG: Test endpoint to verify router is working
-router.get('/debug/test', (req, res) => {
-  res.json({ success: true, message: 'Order router is working' })
-})
-
 // Order management endpoints — strictLimiter must run BEFORE the handler (not after mount)
 router.post('/new', isAuthenticated, strictLimiter, placeNewOrder)
 router.get('/orders/me', isAuthenticated, fetchMyOrders)

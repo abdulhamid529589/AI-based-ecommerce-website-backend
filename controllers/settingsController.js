@@ -24,12 +24,15 @@ export const getShopInfo = async (req, res) => {
       return res.status(200).json(shopInfo)
     }
     return res.status(200).json({
-      shopName: 'Bedtex',
-      shopEmail: 'support@bedtex.com',
-      shopPhone: '+880 1234567890',
-      shopAddress: 'Dhaka, Bangladesh',
+      shopName: '',
+      shopEmail: '',
+      shopPhone: '',
+      shopAddress: '',
       shopDescription: '',
       shopLogo: '',
+      shopFavicon: '',
+      currency: 'BDT',
+      timezone: 'Asia/Dhaka',
     })
   } catch (error) {
     res.status(500).json({ message: 'Error fetching shop info', error: error.message })
@@ -41,6 +44,62 @@ export const updateShopInfo = async (req, res) => {
     const shopInfo = req.body
 
     await setSetting('shop_info', shopInfo)
+
+    // Keep footer_content in sync so storefront Footer shows social/copyright from shop settings
+    try {
+      const social_links = {
+        facebook: shopInfo.facebookUrl || '',
+        instagram: shopInfo.instagramUrl || '',
+        twitter: shopInfo.twitterUrl || '',
+        youtube: shopInfo.youtubeUrl || '',
+        linkedin: shopInfo.linkedinUrl || '',
+      }
+      const existing = await db.query(`SELECT id FROM footer_content LIMIT 1`)
+      if (existing.rows.length > 0) {
+        await db.query(
+          `UPDATE footer_content SET
+             company_name = COALESCE(NULLIF($1, ''), company_name),
+             company_description = COALESCE(NULLIF($2, ''), company_description),
+             contact_email = COALESCE(NULLIF($3, ''), contact_email),
+             contact_phone = COALESCE(NULLIF($4, ''), contact_phone),
+             address = COALESCE(NULLIF($5, ''), address),
+             social_links = $6::jsonb,
+             copyright_text = COALESCE(NULLIF($7, ''), copyright_text),
+             updated_at = NOW()`,
+          [
+            shopInfo.shopName || '',
+            shopInfo.shopDescription || '',
+            shopInfo.shopEmail || '',
+            shopInfo.shopPhone || '',
+            shopInfo.shopAddress || '',
+            JSON.stringify(social_links),
+            shopInfo.copyrightText || '',
+          ],
+        )
+      } else {
+        await db.query(
+          `INSERT INTO footer_content
+             (company_name, company_description, contact_email, contact_phone, address, social_links, copyright_text)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+          [
+            shopInfo.shopName || '',
+            shopInfo.shopDescription || '',
+            shopInfo.shopEmail || '',
+            shopInfo.shopPhone || '',
+            shopInfo.shopAddress || '',
+            JSON.stringify(social_links),
+            shopInfo.copyrightText || '',
+          ],
+        )
+      }
+    } catch (footerErr) {
+      console.warn('Shop info saved but footer sync failed:', footerErr.message)
+    }
+
+    if (req.io) {
+      req.io.emit('settings:updated', { type: 'shop_info' })
+      req.io.emit('content:updated', { type: 'shop_info' })
+    }
     res.status(200).json({ message: 'Shop info updated successfully', shopInfo })
   } catch (error) {
     console.error('Error in updateShopInfo:', error)
@@ -308,6 +367,9 @@ export const updateHomeSections = async (req, res) => {
     const { sections, order } = req.body
     await setSetting('home_sections', sections)
     await setSetting('home_sections_order', order)
+    if (req.io) {
+      req.io.emit('content:updated', { type: 'home_sections' })
+    }
     res.status(200).json({ message: 'Homepage sections updated' })
   } catch (error) {
     res.status(500).json({ message: 'Error updating home sections', error: error.message })
@@ -332,17 +394,29 @@ export const updateCategories = async (req, res) => {
       return res.status(400).json({ message: 'Categories must be an array' })
     }
 
-    // Validate and sanitize categories data
-    const validatedCategories = categories.map((cat) => ({
-      id: cat.id,
-      name: cat.name || '',
-      slug: cat.slug || '',
-      description: cat.description || '',
-      image: cat.image || '',
-      isVisible: cat.isVisible !== undefined ? cat.isVisible : true,
-      order: cat.order || 0,
-      subcategories: Array.isArray(cat.subcategories) ? cat.subcategories : [],
-    }))
+    // Validate and sanitize categories data — ensure each category has a stable id
+    const validatedCategories = categories.map((cat, index) => {
+      const id =
+        cat.id ||
+        cat.slug ||
+        `cat-${Date.now()}-${index}-${String(cat.name || 'item')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')}`
+      return {
+        id,
+        name: cat.name || '',
+        slug:
+          cat.slug ||
+          String(cat.name || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-'),
+        description: cat.description || '',
+        image: cat.image || '',
+        isVisible: cat.isVisible !== undefined ? cat.isVisible : true,
+        order: cat.order || 0,
+        subcategories: Array.isArray(cat.subcategories) ? cat.subcategories : [],
+      }
+    })
 
     console.log('Attempting to save categories:', {
       count: validatedCategories.length,
@@ -350,6 +424,36 @@ export const updateCategories = async (req, res) => {
     })
 
     await setSetting('categories', validatedCategories)
+
+    // Sync JSON-embedded subcategory names into SQL so storefront tree stays consistent
+    try {
+      for (const cat of validatedCategories) {
+        if (!cat.id || !Array.isArray(cat.subcategories)) continue
+        for (let i = 0; i < cat.subcategories.length; i++) {
+          const raw = cat.subcategories[i]
+          const name = typeof raw === 'string' ? raw : raw?.name
+          if (!name) continue
+          const slug =
+            (typeof raw === 'object' && raw.slug) ||
+            String(name)
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+          const existing = await db.query(
+            `SELECT id FROM subcategories WHERE category_id = $1 AND (slug = $2 OR lower(name) = lower($3)) LIMIT 1`,
+            [cat.id, slug, name],
+          )
+          if (existing.rows.length === 0) {
+            await db.query(
+              `INSERT INTO subcategories (category_id, name, slug, position, is_active, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, true, NOW(), NOW())`,
+              [cat.id, name, slug, i],
+            )
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.warn('Category saved but subcategory SQL sync failed:', syncErr.message)
+    }
 
     // 🔌 Emit real-time update via Socket.io
     const io = req.app.get('io')
@@ -392,7 +496,10 @@ export const updateMenus = async (req, res) => {
   try {
     const { headerMenu, footerMenus } = req.body
     await setSetting('navigation_menus', { headerMenu, footerMenus })
-    res.status(200).json({ message: 'Menus updated' })
+    if (req.io) {
+      req.io.emit('content:updated', { type: 'menus' })
+    }
+    res.status(200).json({ message: 'Menus updated', headerMenu, footerMenus })
   } catch (error) {
     res.status(500).json({ message: 'Error updating menus', error: error.message })
   }

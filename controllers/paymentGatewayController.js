@@ -109,23 +109,35 @@ function timingSafeEqualHex(a, b) {
 
 /** Shared secret HMAC for gateway callbacks we control / simulate */
 function expectedCallbackSignature(orderId, status, amount) {
-  const secret =
-    process.env.PAYMENT_CALLBACK_SECRET ||
-    process.env.NAGAD_MERCHANT_KEY ||
-    process.env.ROCKET_MERCHANT_PASSWORD ||
-    process.env.JWT_SECRET_KEY
+  const secret = process.env.PAYMENT_CALLBACK_SECRET
+  if (!secret) {
+    throw new Error('PAYMENT_CALLBACK_SECRET is not configured')
+  }
   const payload = `${orderId}|${status}|${amount}|${secret}`
   return crypto.createHash('sha256').update(payload).digest('hex')
 }
 
 function verifyCallbackSignature({ orderId, status, amount, signature }) {
   if (!signature) return false
-  const expected = expectedCallbackSignature(orderId, status, amount)
-  return timingSafeEqualHex(expected, signature)
+  try {
+    const expected = expectedCallbackSignature(orderId, status, amount)
+    return timingSafeEqualHex(expected, signature)
+  } catch {
+    return false
+  }
 }
 
 // ============ bKash Integration ============
 export const initiateBkashPayment = catchAsyncErrors(async (req, res, next) => {
+  if (!process.env.BKASH_BASE_URL || !process.env.BKASH_APP_KEY) {
+    return next(
+      new ErrorHandler(
+        'bKash is not configured. Set BKASH_BASE_URL and BKASH_APP_KEY/SECRET.',
+        503,
+      ),
+    )
+  }
+
   const { orderId, customerEmail, customerPhone } = req.body
 
   if (!orderId || !customerEmail || !customerPhone) {
@@ -251,6 +263,15 @@ export const bkashPaymentCallback = catchAsyncErrors(async (req, res) => {
 
 // ============ Nagad Integration ============
 export const initiateNagadPayment = catchAsyncErrors(async (req, res, next) => {
+  if (process.env.ENABLE_NAGAD_PAYMENTS !== 'true' || !process.env.NAGAD_BASE_URL) {
+    return next(
+      new ErrorHandler(
+        'Nagad payments are not enabled. Set ENABLE_NAGAD_PAYMENTS=true and NAGAD_BASE_URL.',
+        503,
+      ),
+    )
+  }
+
   const { orderId, customerEmail, customerPhone } = req.body
 
   if (!orderId || !customerEmail || !customerPhone) {
@@ -334,6 +355,15 @@ export const nagadPaymentCallback = catchAsyncErrors(async (req, res, next) => {
 
 // ============ Rocket Integration ============
 export const initiateRocketPayment = catchAsyncErrors(async (req, res, next) => {
+  if (process.env.ENABLE_ROCKET_PAYMENTS !== 'true' || !process.env.ROCKET_BASE_URL) {
+    return next(
+      new ErrorHandler(
+        'Rocket payments are not enabled. Set ENABLE_ROCKET_PAYMENTS=true and ROCKET_BASE_URL.',
+        503,
+      ),
+    )
+  }
+
   const { orderId, customerEmail, customerPhone } = req.body
 
   if (!orderId || !customerEmail || !customerPhone) {
@@ -437,11 +467,13 @@ export const initiateCODPayment = catchAsyncErrors(async (req, res, next) => {
 export const getPaymentStatus = catchAsyncErrors(async (req, res, next) => {
   const { orderId } = req.params
 
+  // Accept either order UUID or gateway payment_intent_id (bKash paymentID redirect)
   const result = await database.query(
     `SELECT p.*, o.buyer_id, o.total_price
      FROM payments p
      JOIN orders o ON o.id = p.order_id
-     WHERE p.order_id = $1`,
+     WHERE p.order_id::text = $1 OR p.payment_intent_id = $1
+     LIMIT 1`,
     [orderId],
   )
 
@@ -457,7 +489,10 @@ export const getPaymentStatus = catchAsyncErrors(async (req, res, next) => {
   const { buyer_id, ...payment } = row
   res.status(200).json({
     success: true,
-    payment,
+    payment: {
+      ...payment,
+      amount: payment.amount ?? row.total_price,
+    },
   })
 })
 

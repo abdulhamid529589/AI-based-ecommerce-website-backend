@@ -165,9 +165,31 @@ export async function getUserConversations(userId) {
 }
 
 /**
- * Get owner conversations
+ * Fetch a single conversation by id
  */
-export async function getOwnerConversations(ownerId) {
+export async function getConversationById(conversationId) {
+  const result = await database.query(`SELECT * FROM conversations WHERE id = $1`, [conversationId])
+  return result.rows[0] || null
+}
+
+/**
+ * Returns true if user may access the conversation (owner customer or Admin)
+ */
+export async function userCanAccessConversation(conversationId, userId, userRole) {
+  const conversation = await getConversationById(conversationId)
+  if (!conversation) {
+    return { allowed: false, status: 404, conversation: null }
+  }
+  if (userRole === 'Admin' || conversation.user_id === userId) {
+    return { allowed: true, status: 200, conversation }
+  }
+  return { allowed: false, status: 403, conversation }
+}
+
+/**
+ * Get all conversations (admin dashboard)
+ */
+export async function getOwnerConversations() {
   try {
     const result = await database.query(
       `SELECT c.*, u.name as user_name, u.email as user_email, u.avatar as user_avatar,
@@ -243,6 +265,8 @@ export default {
   saveMessage,
   getConversationMessages,
   getUserConversations,
+  getConversationById,
+  userCanAccessConversation,
   getOwnerConversations,
   markMessagesAsRead,
   closeConversation,

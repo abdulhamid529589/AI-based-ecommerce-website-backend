@@ -3,6 +3,9 @@ import { sanitizeUser } from './sanitizeUser.js'
 
 const isProduction = process.env.NODE_ENV === 'production'
 
+/** Cross-origin SPAs need None+Secure; same-site deploys can keep Lax/Strict via env. */
+const cookieSameSite = process.env.COOKIE_SAME_SITE || (isProduction ? 'None' : 'Lax')
+
 export const sendToken = (user, statusCode, message, res) => {
   const secretKeyAccess = process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY
   const secretKeyRefresh = process.env.JWT_SECRET_KEY_REFRESH || process.env.JWT_SECRET_KEY
@@ -39,24 +42,24 @@ export const sendToken = (user, statusCode, message, res) => {
     .cookie('token', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: isProduction,
+      sameSite: cookieSameSite,
+      secure: isProduction || cookieSameSite === 'None',
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
     .cookie('accessToken', accessToken, {
       expires: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
       httpOnly: true,
-      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: isProduction,
+      sameSite: cookieSameSite,
+      secure: isProduction || cookieSameSite === 'None',
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
     .cookie('refreshToken', refreshToken, {
       expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       httpOnly: true,
-      sameSite: 'Strict', // ✅ CSRF protection - Strict mode
-      secure: isProduction,
+      sameSite: cookieSameSite,
+      secure: isProduction || cookieSameSite === 'None',
       domain: process.env.COOKIE_DOMAIN || undefined,
       path: '/',
     })
@@ -64,11 +67,9 @@ export const sendToken = (user, statusCode, message, res) => {
       success: true,
       user: sanitizeUser(user),
       message,
-      // 🔒 Return tokens in response for SPA/frontend compatibility
-      // Frontend stores in localStorage for persistence
-      // Cookies provide additional HttpOnly layer for security
+      // Access token for SPA Authorization header (short-lived)
       accessToken: accessToken,
-      refreshToken: refreshToken,
-      token: accessToken, // Alias for backward compatibility
+      token: accessToken,
+      // Refresh token is HttpOnly cookie only — never expose in JSON
     })
 }

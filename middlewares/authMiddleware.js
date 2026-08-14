@@ -72,29 +72,13 @@ export const isAuthenticated = catchAsyncErrors(async (req, res, next) => {
     }
 
     req.user = user.rows[0]
-    // 🔍 DEBUG: Log all user columns for troubleshooting
-    console.log(
-      `✅ User authenticated: ${user.rows[0].name} (ID: ${user.rows[0].id}) from ${tokenSource}`,
-    )
-    console.log(`   User object keys: ${Object.keys(user.rows[0]).join(', ')}`)
-    console.log(`   User role value: "${user.rows[0].role}" (type: ${typeof user.rows[0].role})`)
 
-    // DEBUG: Show role mismatch if it exists
-    if (req.path.includes('/order/admin') && decoded.role !== user.rows[0].role) {
-      console.log(`   ⚠️ ROLE MISMATCH DETECTED:`, {
-        roleInJWT: decoded.role,
-        roleInDB: user.rows[0].role,
-      })
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(
+        `✅ User authenticated: ${user.rows[0].name} (ID: ${user.rows[0].id}) from ${tokenSource}`,
+      )
     }
 
-    console.log(`   Full user data:`, {
-      id: user.rows[0].id,
-      name: user.rows[0].name,
-      email: user.rows[0].email ? '***' : 'null',
-      mobile: user.rows[0].mobile ? '***' : 'null',
-      role: user.rows[0].role,
-      created_at: user.rows[0].created_at,
-    })
     next()
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {

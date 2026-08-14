@@ -5,6 +5,7 @@ import {
   getPersonalizedRecommendations,
   getTrendingProducts,
 } from '../controllers/searchController.js'
+import { isAuthenticated } from '../middlewares/authMiddleware.js'
 
 const router = express.Router()
 
@@ -27,7 +28,7 @@ router.get('/suggestions', getSearchSuggestions)
  * Get personalized product recommendations
  * Body: { userId?, context?, limit? }
  */
-router.post('/recommendations', getPersonalizedRecommendations)
+router.post('/recommendations', isAuthenticated, getPersonalizedRecommendations)
 
 /**
  * GET /api/v1/search/trending

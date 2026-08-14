@@ -42,12 +42,24 @@ import {
   updateGlobalSettings,
   // Categories
   getCategories,
+  getStorefrontConfig,
+  getPublicPage,
+  submitContactInquiry,
+  subscribeNewsletter,
 } from '../controllers/contentController.js'
 import { uploadImage } from '../controllers/settingsController.js'
 import { getCategoriesWithSubcategories_Controller } from '../controllers/subcategoryController.js'
 import { isAuthenticated, authorizedRoles } from '../middlewares/authMiddleware.js'
 
 const router = express.Router()
+
+// ============================================
+// PUBLIC STOREFRONT BOOTSTRAP
+// ============================================
+router.get('/storefront', getStorefrontConfig)
+router.get('/pages/:slug', getPublicPage)
+router.post('/contact', submitContactInquiry)
+router.post('/newsletter', subscribeNewsletter)
 
 // ============================================
 // PAGE MANAGEMENT (Admin Only)
@@ -115,9 +127,9 @@ router.put(
 )
 
 // ============================================
-// FOOTER CONTENT (Admin Only)
+// FOOTER CONTENT
 // ============================================
-router.get('/footer', isAuthenticated, authorizedRoles('Admin'), getFooterContent)
+router.get('/footer', getFooterContent)
 router.post('/footer', isAuthenticated, authorizedRoles('Admin'), updateFooterContent)
 
 // ============================================

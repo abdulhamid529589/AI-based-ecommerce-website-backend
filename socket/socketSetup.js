@@ -1,6 +1,8 @@
 import { Server } from 'socket.io'
 import { createLogger } from '../utils/logger.js'
 import { initializeChatSocket } from './chatSocket.js'
+import { verifySocketToken } from '../utils/verifyAccessToken.js'
+import database from '../database/db.js'
 
 const logger = createLogger('Socket.IO')
 
@@ -61,6 +63,34 @@ export const initializeSocket = (httpServer) => {
     frontend: new Map(),
   }
 
+  io.use(async (socket, next) => {
+    try {
+      const decoded = verifySocketToken(socket.handshake)
+      if (decoded?.id) {
+        const userResult = await database.query(
+          'SELECT id, role, name FROM users WHERE id = $1',
+          [decoded.id],
+        )
+        if (userResult.rows[0]) {
+          socket.data.userId = userResult.rows[0].id
+          socket.data.userRole = userResult.rows[0].role
+          socket.data.userName = userResult.rows[0].name
+        }
+      }
+      next()
+    } catch {
+      next()
+    }
+  })
+
+  const requireDashboardAuth = (socket) => {
+    if (!socket.data.userId || socket.data.userRole !== 'Admin') {
+      socket.emit('error', { message: 'Admin authentication required for dashboard channel' })
+      return false
+    }
+    return true
+  }
+
   /**
    * Connection handler with comprehensive error handling
    */
@@ -78,11 +108,14 @@ export const initializeSocket = (httpServer) => {
        */
       socket.on('client-type', (type) => {
         try {
+          if (type === 'dashboard' && !requireDashboardAuth(socket)) {
+            return
+          }
           clientType = type === 'dashboard' ? 'dashboard' : 'frontend'
           connectedClients[clientType].set(socket.id, {
             socketId: socket.id,
             connectedAt: new Date(),
-            userId: userId,
+            userId: socket.data.userId,
           })
 
           socket.join(clientType)
@@ -103,13 +136,17 @@ export const initializeSocket = (httpServer) => {
        */
       socket.on('identify', (data) => {
         try {
-          clientType =
-            data?.role === 'dashboard' || data?.type === 'dashboard' ? 'dashboard' : 'frontend'
+          const wantsDashboard =
+            data?.role === 'dashboard' || data?.type === 'dashboard' || data?.role === 'Admin'
+          if (wantsDashboard && !requireDashboardAuth(socket)) {
+            return
+          }
+          clientType = wantsDashboard ? 'dashboard' : 'frontend'
           connectedClients[clientType].set(socket.id, {
             socketId: socket.id,
             connectedAt: new Date(),
-            role: data?.role || clientType,
-            userId: data?.userId,
+            role: socket.data.userRole || data?.role || clientType,
+            userId: socket.data.userId,
           })
 
           socket.join(clientType)

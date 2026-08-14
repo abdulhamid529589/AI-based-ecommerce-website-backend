@@ -630,6 +630,11 @@ export const updateGlobalSettings = catchAsyncErrors(async (req, res, next) => {
     result = rows[0]
   }
 
+  if (req.io) {
+    req.io.emit('settings:updated', { type: 'global_settings' })
+    req.io.emit('content:updated', { type: 'global_settings' })
+  }
+
   res.status(200).json({
     success: true,
     data: result,
@@ -643,3 +648,193 @@ export const getCategories = catchAsyncErrors(async (req, res, next) => {
   const categories = await getSetting('categories')
   res.status(200).json(categories || [])
 })
+
+const safeQuery = async (sql, params = []) => {
+  try {
+    return await database.query(sql, params)
+  } catch {
+    return { rows: [] }
+  }
+}
+
+const safeSetting = async (key) => {
+  try {
+    return await getSetting(key)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Public bootstrap for the storefront — shop, hero, footer, menus, CMS pages, home sections.
+ */
+export const getStorefrontConfig = catchAsyncErrors(async (req, res) => {
+  const [
+    globalRes,
+    footerRes,
+    bannersRes,
+    pagesRes,
+    menusRes,
+    heroRes,
+    shopInfo,
+    homeSections,
+    navMenus,
+    shipping,
+  ] = await Promise.all([
+    safeQuery(`SELECT * FROM global_settings LIMIT 1`),
+    safeQuery(`SELECT * FROM footer_content LIMIT 1`),
+    safeQuery(
+      `SELECT * FROM promotional_banners WHERE COALESCE(is_active, true) = true ORDER BY position ASC, created_at DESC`,
+    ),
+    safeQuery(
+      `SELECT slug, title, description, content, image_url FROM pages WHERE COALESCE(is_published, true) = true ORDER BY position ASC`,
+    ),
+    safeQuery(
+      `SELECT id, label, url, icon, position, parent_id, target FROM menu_items WHERE COALESCE(is_visible, true) = true ORDER BY position ASC`,
+    ),
+    safeQuery(
+      `SELECT * FROM hero_slides WHERE COALESCE(is_active, true) = true ORDER BY display_order ASC NULLS LAST`,
+    ),
+    safeSetting('shop_info'),
+    safeSetting('home_sections'),
+    safeSetting('navigation_menus'),
+    safeSetting('shipping_settings'),
+  ])
+
+  const global = globalRes.rows[0] || {}
+  let footer = footerRes.rows[0] || null
+  const shop = shopInfo && typeof shopInfo === 'object' ? shopInfo : {}
+
+  // Merge shop_info social/copyright into footer when footer fields are empty
+  const shopSocial = {
+    facebook: shop.facebookUrl || '',
+    instagram: shop.instagramUrl || '',
+    twitter: shop.twitterUrl || '',
+    youtube: shop.youtubeUrl || '',
+    linkedin: shop.linkedinUrl || '',
+  }
+  const hasShopSocial = Object.values(shopSocial).some(Boolean)
+  if (footer) {
+    const footerSocialEmpty =
+      !footer.social_links ||
+      (typeof footer.social_links === 'object' &&
+        !Object.values(footer.social_links).some((v) => v && v !== '#'))
+    footer = {
+      ...footer,
+      company_name: footer.company_name || shop.shopName || null,
+      contact_email: footer.contact_email || shop.shopEmail || null,
+      contact_phone: footer.contact_phone || shop.shopPhone || null,
+      address: footer.address || shop.shopAddress || null,
+      company_description: footer.company_description || shop.shopDescription || null,
+      copyright_text: footer.copyright_text || shop.copyrightText || null,
+      social_links: footerSocialEmpty && hasShopSocial ? shopSocial : footer.social_links,
+    }
+  } else if (hasShopSocial || shop.copyrightText) {
+    footer = {
+      company_name: shop.shopName || null,
+      company_description: shop.shopDescription || null,
+      contact_email: shop.shopEmail || null,
+      contact_phone: shop.shopPhone || null,
+      address: shop.shopAddress || null,
+      social_links: shopSocial,
+      copyright_text: shop.copyrightText || null,
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      shop: {
+        shopName: shop.shopName || shop.name || global.site_name || null,
+        email: shop.shopEmail || shop.email || footer?.contact_email || global.email || null,
+        phone: shop.shopPhone || shop.phone || footer?.contact_phone || global.phone || null,
+        address: shop.shopAddress || shop.address || footer?.address || global.address || null,
+        description:
+          shop.shopDescription ||
+          shop.description ||
+          footer?.company_description ||
+          global.description ||
+          null,
+        tagline: shop.shopTagline || shop.tagline || shop.shopDescription || null,
+        logo: shop.shopLogo || shop.logo || global.site_logo || null,
+        favicon: shop.shopFavicon || shop.favicon || global.site_favicon || null,
+        currency: shop.currency || shipping?.pricing?.currency || global.currency || 'BDT',
+        timezone: shop.timezone || global.timezone || 'Asia/Dhaka',
+        whatsapp: shop.whatsapp || shop.whatsappNumber || null,
+        facebookUrl: shop.facebookUrl || null,
+        instagramUrl: shop.instagramUrl || null,
+        twitterUrl: shop.twitterUrl || null,
+        youtubeUrl: shop.youtubeUrl || null,
+        linkedinUrl: shop.linkedinUrl || null,
+        copyrightText: shop.copyrightText || null,
+      },
+      global,
+      footer,
+      banners: bannersRes.rows,
+      heroSlides: heroRes.rows,
+      pages: pagesRes.rows,
+      menus: menusRes.rows,
+      headerMenu: navMenus?.headerMenu || menusRes.rows,
+      footerMenus: navMenus?.footerMenus || footer?.footer_links || null,
+      homeSections: homeSections || null,
+      shipping: shipping || null,
+    },
+  })
+})
+
+export const getPublicPage = catchAsyncErrors(async (req, res, next) => {
+  const slug = String(req.params.slug || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '')
+  const { rows } = await safeQuery(
+    `SELECT slug, title, description, content, image_url, keywords
+     FROM pages WHERE slug = $1 AND COALESCE(is_published, true) = true LIMIT 1`,
+    [slug],
+  )
+  if (!rows[0]) {
+    return res.status(404).json({ success: false, message: 'Page not found' })
+  }
+  res.status(200).json({ success: true, data: rows[0] })
+})
+
+export const submitContactInquiry = catchAsyncErrors(async (req, res) => {
+  const { name, email, subject, message } = req.body || {}
+  if (!name || !email || !message) {
+    return res.status(400).json({ success: false, message: 'Name, email, and message are required.' })
+  }
+  await database.query(`
+    CREATE TABLE IF NOT EXISTS contact_inquiries (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      subject VARCHAR(500),
+      message TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  await database.query(
+    `INSERT INTO contact_inquiries (name, email, subject, message) VALUES ($1, $2, $3, $4)`,
+    [String(name).slice(0, 255), String(email).slice(0, 255), String(subject || '').slice(0, 500), String(message).slice(0, 8000)],
+  )
+  res.status(201).json({ success: true, message: 'Message received.' })
+})
+
+export const subscribeNewsletter = catchAsyncErrors(async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ success: false, message: 'Valid email required.' })
+  }
+  await database.query(`
+    CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  await database.query(
+    `INSERT INTO newsletter_subscribers (email) VALUES ($1) ON CONFLICT (email) DO NOTHING`,
+    [email],
+  )
+  res.status(200).json({ success: true, message: 'Subscribed.' })
+})
+

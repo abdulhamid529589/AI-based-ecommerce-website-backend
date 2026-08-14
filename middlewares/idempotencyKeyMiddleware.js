@@ -17,7 +17,13 @@ export const idempotencyKeyMiddleware = async (req, res, next) => {
   const idempotencyKey = req.headers['idempotency-key']
 
   // For payment and checkout operations, idempotency key is required
-  const isPaymentOperation = req.path.includes('/payment') || req.path.includes('/checkout')
+  const isPaymentOperation =
+    req.path.includes('/payment') ||
+    req.path.includes('/checkout') ||
+    req.path.includes('/bkash') ||
+    req.path.includes('/nagad') ||
+    req.path.includes('/rocket') ||
+    req.baseUrl?.includes('/payment')
 
   if (isPaymentOperation && !idempotencyKey) {
     return next(new ErrorHandler('Idempotency-Key header is required for payment operations', 400))

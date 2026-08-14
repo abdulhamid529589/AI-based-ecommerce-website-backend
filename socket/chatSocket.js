@@ -4,14 +4,15 @@
  */
 
 import { createLogger } from '../utils/logger.js'
-import jwt from 'jsonwebtoken'
 import database from '../database/db.js'
 import {
   getOrCreateConversation,
   saveMessage,
   getConversationMessages,
   markMessagesAsRead,
+  userCanAccessConversation,
 } from '../database/chat.js'
+import { verifySocketToken } from '../utils/verifyAccessToken.js'
 import { getSetting } from '../models/settingsTable.js'
 
 const logger = createLogger('Chat.Socket')
@@ -27,18 +28,11 @@ export function initializeChatSocket(io) {
 
   chatNamespace.use(async (socket, next) => {
     try {
-      const token =
-        socket.handshake.auth?.token ||
-        socket.handshake.headers?.authorization?.replace('Bearer ', '')
+      const decoded = verifySocketToken(socket.handshake)
 
-      if (!token) {
-        return next()
+      if (!decoded?.id) {
+        return next(new Error('Authentication required'))
       }
-
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET_KEY_ACCESS || process.env.JWT_SECRET_KEY,
-      )
 
       const userResult = await database.query(
         'SELECT id, role, name FROM users WHERE id = $1',
@@ -70,19 +64,23 @@ export function initializeChatSocket(io) {
     socket.on('join-chat', async (data) => {
       try {
         const { conversationId } = data
-        const userId = socket.data.userId || data.userId
+        const userId = socket.data.userId
 
         if (!userId || !conversationId) {
           socket.emit('error', { message: 'User ID and conversation ID required' })
           return
         }
 
-        if (socket.data.userId && data.userId && data.userId !== socket.data.userId) {
-          socket.emit('error', { message: 'Unauthorized' })
+        const access = await userCanAccessConversation(
+          conversationId,
+          userId,
+          socket.data.userRole,
+        )
+        if (!access.allowed) {
+          socket.emit('error', { message: 'Not authorized for this conversation' })
           return
         }
 
-        // Join user to their conversation room
         socket.join(`conversation:${conversationId}`)
         activeChatUsers.set(socket.id, { userId, conversationId })
 
@@ -115,15 +113,20 @@ export function initializeChatSocket(io) {
     socket.on('send-message', async (data) => {
       try {
         const { conversationId, message, isOwner } = data
-        const userId = socket.data.userId || data.userId
+        const userId = socket.data.userId
 
         if (!message || !conversationId || !userId) {
           socket.emit('error', { message: 'Missing required fields' })
           return
         }
 
-        if (socket.data.userId && data.userId && data.userId !== socket.data.userId) {
-          socket.emit('error', { message: 'Unauthorized' })
+        const access = await userCanAccessConversation(
+          conversationId,
+          userId,
+          socket.data.userRole,
+        )
+        if (!access.allowed) {
+          socket.emit('error', { message: 'Not authorized for this conversation' })
           return
         }
 
@@ -168,7 +171,7 @@ export function initializeChatSocket(io) {
                 id: 'auto-reply-' + Date.now(),
                 conversationId,
                 senderId: 'owner',
-                senderName: 'BedTex Owner',
+                senderName: 'Support',
                 message: autoReplyMessage,
                 isOwner: true,
                 isAutoReply: true,
@@ -190,9 +193,18 @@ export function initializeChatSocket(io) {
     socket.on('mark-read', async (data) => {
       try {
         const { conversationId } = data
-        const userId = socket.data.userId || data.userId
+        const userId = socket.data.userId
 
         if (!conversationId || !userId) {
+          return
+        }
+
+        const access = await userCanAccessConversation(
+          conversationId,
+          userId,
+          socket.data.userRole,
+        )
+        if (!access.allowed) {
           return
         }
 
@@ -213,7 +225,9 @@ export function initializeChatSocket(io) {
      * User typing
      */
     socket.on('typing', (data) => {
-      const { conversationId, userId, isTyping } = data
+      const { conversationId, isTyping } = data
+      const userId = socket.data.userId
+      if (!conversationId || !userId) return
 
       chatNamespace
         .to(`conversation:${conversationId}`)

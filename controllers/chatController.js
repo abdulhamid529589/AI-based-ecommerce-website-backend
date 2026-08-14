@@ -11,6 +11,7 @@ import {
   markMessagesAsRead,
   closeConversation,
   deleteConversation,
+  userCanAccessConversation,
 } from '../database/chat.js'
 
 /**
@@ -40,9 +41,6 @@ export const getUserChats = async (req, res) => {
  */
 export const getOwnerChats = async (req, res) => {
   try {
-    const userId = req.user.id
-
-    // Check if user is admin/owner
     if (req.user.role !== 'Admin') {
       return res.status(403).json({
         success: false,
@@ -50,7 +48,7 @@ export const getOwnerChats = async (req, res) => {
       })
     }
 
-    const conversations = await getOwnerConversations(userId)
+    const conversations = await getOwnerConversations()
 
     res.status(200).json({
       success: true,
@@ -74,9 +72,15 @@ export const getMessages = async (req, res) => {
     const { conversationId } = req.params
     const userId = req.user.id
 
-    // Mark messages as read
-    await markMessagesAsRead(conversationId, userId)
+    const access = await userCanAccessConversation(conversationId, userId, req.user.role)
+    if (!access.allowed) {
+      return res.status(access.status).json({
+        success: false,
+        message: access.status === 404 ? 'Conversation not found' : 'Not authorized',
+      })
+    }
 
+    await markMessagesAsRead(conversationId, userId)
     const messages = await getConversationMessages(conversationId)
 
     res.status(200).json({
@@ -125,14 +129,11 @@ export const closeChatConversation = async (req, res) => {
     const { conversationId } = req.params
     const userId = req.user.id
 
-    // Verify ownership
-    const conversation = await getOwnerConversations(userId)
-    const isOwner = conversation.some((c) => c.id === conversationId)
-
-    if (!isOwner && req.user.role !== 'Admin') {
-      return res.status(403).json({
+    const access = await userCanAccessConversation(conversationId, userId, req.user.role)
+    if (!access.allowed) {
+      return res.status(access.status).json({
         success: false,
-        message: 'Not authorized to close this conversation',
+        message: access.status === 404 ? 'Conversation not found' : 'Not authorized',
       })
     }
 
@@ -158,21 +159,7 @@ export const deleteChatConversation = async (req, res) => {
   try {
     const { conversationId } = req.params
 
-    // Log request details
-    console.log('[CHAT-DELETE] Request:', {
-      conversationId,
-      userId: req.user?.id,
-      userRole: req.user?.role,
-      isAuthenticated: !!req.user,
-    })
-
-    // Check authorization
     if (!req.user || req.user.role !== 'Admin') {
-      console.error('[CHAT-DELETE] Authorization failed:', {
-        hasUser: !!req.user,
-        userRole: req.user?.role,
-        required: 'Admin',
-      })
       return res.status(403).json({
         success: false,
         message: 'Only admins can delete conversations',
@@ -180,8 +167,6 @@ export const deleteChatConversation = async (req, res) => {
     }
 
     await deleteConversation(conversationId)
-
-    console.log('[CHAT-DELETE] Conversation deleted:', conversationId)
 
     res.status(200).json({
       success: true,
